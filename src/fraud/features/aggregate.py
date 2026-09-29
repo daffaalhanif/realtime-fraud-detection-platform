@@ -94,8 +94,9 @@ def process_transaction(
         menambah pada) state lama.
     """
     # Deviasi standar hanya terdefinisi kalau entitas punya histori sebelumnya.
+    # Pembulatan bisa membuat amt_m2 negatif tipis, dan negatif ** 0.5 di Python jadi kompleks.
     amt_std_so_far = (
-        (state["amt_m2"] / state["txn_count"]) ** 0.5
+        max(state["amt_m2"] / state["txn_count"], 0.0) ** 0.5
         if state["txn_count"] > 0
         else 0.0
     )
