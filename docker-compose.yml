@@ -32,6 +32,37 @@ services:
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
 
+  mlflow:
+    build:
+      context: .
+      # Image resmi MLflow tidak menyertakan driver Postgres.
+      # Versi dipatok sama dengan klien di pyproject.toml supaya API keduanya cocok.
+      dockerfile_inline: |
+        FROM ghcr.io/mlflow/mlflow:v3.16.1
+        RUN pip install --no-cache-dir psycopg2-binary
+    depends_on:
+      - postgres
+    # Postgres belum tentu siap saat container ini pertama start setelah compose up.
+    restart: on-failure
+    ports:
+      # Hanya loopback, dibuka ke luar sengaja lewat tunneling saat pelatihan tier 2.
+      # Host 5001 karena 5000 dipakai AirPlay Receiver di macOS.
+      - "127.0.0.1:5001:5000"
+    environment:
+      # Skema mlflow terpisah dari tabel audit di database yang sama, harus dibuat manual sekali.
+      MLFLOW_BACKEND_STORE_URI: "postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}\
+        @postgres:5432/${POSTGRES_DB}?options=-csearch_path%3Dmlflow"
+    # Artefak lewat HTTP proxy server supaya klien di Colab tidak perlu berbagi filesystem.
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --serve-artifacts
+      --artifacts-destination /mlflow/artifacts
+    volumes:
+      - mlflow_artifacts:/mlflow/artifacts
+
 volumes:
   redis_data:
   postgres_data:
+  mlflow_artifacts:
