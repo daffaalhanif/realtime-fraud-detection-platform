@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Platform penilaian risiko fraud real-time untuk transaksi kartu card-not-present"
 requires-python = ">=3.12"
 dependencies = [
+    "confluent-kafka>=2.15.1",
     "fastapi>=0.141.1",
     "lightgbm>=4.7.0",
     "mlflow==3.16.1",
@@ -19,6 +20,7 @@ dependencies = [
     "redis>=8.1.0",
     "scikit-learn>=1.9.1",
     "skl2onnx>=1.20.0",
+    "uvicorn>=0.53.0",
     "xgboost>=3.4.1",
 ]
 

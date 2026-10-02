@@ -231,6 +231,10 @@ data/
 
 # Artefak tracking MLflow lokal
 mlruns/
+mlflow.db
+
+# Data runtime lokal API scoring (antrean cadangan Kafka berbasis SQLite)
+var/
 
 # macOS
 .DS_Store
