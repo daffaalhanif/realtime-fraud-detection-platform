@@ -9,7 +9,7 @@ fungsi yang sama dengan jalur scoring real-time, bukan implementasi kedua.
 import types
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypedDict, get_args, get_origin
+from typing import get_args, get_origin
 
 import pandas as pd
 
@@ -20,8 +20,8 @@ from fraud.features.aggregate import (
 )
 from fraud.features.cold_start import get_default_state
 from fraud.features.encoding import (
-    CategoryMappings,
-    apply_category_mappings,
+    FeatureSpec,
+    build_model_input,
     fit_category_mappings,
 )
 from fraud.schemas.transaction import Transaction
@@ -59,23 +59,6 @@ NUMERIC_CATEGORICAL_COLUMNS = (
 # Batas split berdasarkan posisi baris setelah data urut kronologis: 60% train, 20% validasi.
 TRAIN_END_FRACTION = 0.6
 VALIDATION_END_FRACTION = 0.8
-
-
-class FeatureSpec(TypedDict):
-    """Kontrak input model, disimpan sebagai artefak bersama model.
-
-    Attributes:
-        input_columns: Urutan kolom yang diterima model, fitur agregat lebih dulu.
-        encoded_columns: Kolom di `input_columns` yang semula string, kini kode ordinal.
-        nominal_numeric_columns: Kolom di `input_columns` yang nominal tapi tetap bernilai
-            asli. Model pohon boleh memakainya apa adanya, model linear perlu one-hot.
-        category_mappings: Pemetaan nilai ke kode untuk tiap kolom di `encoded_columns`.
-    """
-
-    input_columns: list[str]
-    encoded_columns: list[str]
-    nominal_numeric_columns: list[str]
-    category_mappings: CategoryMappings
 
 
 @dataclass(frozen=True)
@@ -188,9 +171,11 @@ def _raw_input_columns() -> list[str]:
 
 def _to_split(part: pd.DataFrame, spec: FeatureSpec) -> Split:
     """Mengubah satu bagian data menjadi matriks input float32, label, dan kunci entitas."""
-    encoded = apply_category_mappings(part[spec["input_columns"]], spec["category_mappings"])
+    matrix = build_model_input(
+        {column: part[column].to_numpy() for column in spec["input_columns"]}, spec
+    )
     return Split(
-        features=encoded.astype("float32"),
+        features=pd.DataFrame(matrix, columns=spec["input_columns"], index=part.index),
         label=part[LABEL_COLUMN].astype("int8"),
         entity_key=part[["TransactionID", "card1"]],
     )
