@@ -24,13 +24,15 @@ import redis
 from dotenv import load_dotenv
 from pydantic import TypeAdapter
 
+from fraud.features.offline_store import (
+    INITIAL_PARQUET_DIR,
+    PARTITION_COLUMN,
+    SECONDS_PER_DAY,
+)
 from fraud.schemas.transaction import Transaction
 from redis_batch import compute_features_and_sequences, write_redis
 
 DATA_DIR = Path("data")
-PARQUET_OUTPUT_DIR = Path("data/processed/transactions")
-
-SECONDS_PER_DAY = 86400
 
 
 def _is_str_annotation(annotation: object) -> bool:
@@ -99,9 +101,9 @@ def write_parquet(df: pd.DataFrame, output_dir: Path) -> None:
     data mulai tercatat), bukan tanggal kalender sungguhan.
     """
     df = df.copy()
-    df["txn_day"] = df["TransactionDT"] // SECONDS_PER_DAY
+    df[PARTITION_COLUMN] = df["TransactionDT"] // SECONDS_PER_DAY
     output_dir.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(output_dir, partition_cols=["txn_day"], index=False)
+    df.to_parquet(output_dir, partition_cols=[PARTITION_COLUMN], index=False)
 
 
 def main() -> None:
@@ -125,7 +127,7 @@ def main() -> None:
     print(f"Total entitas: {len(states)}")
 
     print("Menulis Parquet...")
-    write_parquet(df, PARQUET_OUTPUT_DIR)
+    write_parquet(df, INITIAL_PARQUET_DIR)
 
     print("Menulis Redis...")
     write_redis(states, sequences, redis_client)

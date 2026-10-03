@@ -16,14 +16,8 @@ import pandas as pd
 import redis
 from dotenv import load_dotenv
 
+from fraud.features.offline_store import INITIAL_PARQUET_DIR, PARTITION_COLUMN
 from redis_batch import compute_features_and_sequences, write_redis
-
-PARQUET_DIR = Path("data/processed/transactions")
-
-# Kolom partisi Parquet, bukan bagian data mentah hasil join - harus
-# dibuang sebelum diproses supaya sequence yang ditulis ulang identik
-# dengan hasil pemuatan awal, yang tidak pernah punya kolom ini.
-PARTITION_COLUMN = "txn_day"
 
 
 def load_from_parquet(parquet_dir: Path) -> pd.DataFrame:
@@ -38,6 +32,8 @@ def load_from_parquet(parquet_dir: Path) -> pd.DataFrame:
         scripts/load_initial_data.py sebelum ditulis ke Parquet.
     """
     df = pd.read_parquet(parquet_dir)
+    # Kolom partisi bukan bagian data mentah hasil join - harus dibuang supaya sequence
+    # yang ditulis ulang identik dengan hasil pemuatan awal, yang tidak punya kolom ini.
     df = df.drop(columns=[PARTITION_COLUMN])
     # TransactionID sebagai tie-breaker: banyak baris berbagi TransactionDT
     # yang sama persis, dan TransactionID terbukti selalu naik mengikuti
@@ -56,7 +52,7 @@ def main() -> None:
     )
 
     print("Membaca data mentah dari Parquet...")
-    df = load_from_parquet(PARQUET_DIR)
+    df = load_from_parquet(INITIAL_PARQUET_DIR)
     print(f"Total baris: {len(df)}")
 
     print("Menghitung ulang fitur agregat dan sequence per entitas...")

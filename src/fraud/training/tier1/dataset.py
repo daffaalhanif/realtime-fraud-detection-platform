@@ -24,11 +24,8 @@ from fraud.features.encoding import (
     build_model_input,
     fit_category_mappings,
 )
+from fraud.features.offline_store import INITIAL_PARQUET_DIR, LABEL_COLUMN, PARTITION_COLUMN
 from fraud.schemas.transaction import Transaction
-
-PARQUET_DIR = Path("data/processed/transactions")
-
-LABEL_COLUMN = "isFraud"
 
 # Pengenal, waktu mentah, dan kunci entitas (perilakunya sudah diwakili fitur agregat).
 EXCLUDED_RAW_COLUMNS = ("TransactionID", "TransactionDT", "card1")
@@ -86,7 +83,7 @@ class PreparedData:
     spec: FeatureSpec
 
 
-def load_transactions(parquet_dir: Path = PARQUET_DIR) -> pd.DataFrame:
+def load_transactions(parquet_dir: Path = INITIAL_PARQUET_DIR) -> pd.DataFrame:
     """Membaca Parquet dan mengurutkannya kronologis.
 
     Args:
@@ -95,7 +92,7 @@ def load_transactions(parquet_dir: Path = PARQUET_DIR) -> pd.DataFrame:
     Returns:
         Seluruh transaksi urut `TransactionDT` naik, tanpa kolom partisi `txn_day`.
     """
-    df = pd.read_parquet(parquet_dir).drop(columns=["txn_day"])
+    df = pd.read_parquet(parquet_dir).drop(columns=[PARTITION_COLUMN])
     # Baca Parquet berpartisi tidak menjamin urutan kronologis, sedangkan split dan fitur
     # agregat bergantung pada urutan. TransactionID memutus seri TransactionDT yang sama.
     return df.sort_values(["TransactionDT", "TransactionID"]).reset_index(drop=True)
@@ -181,7 +178,7 @@ def _to_split(part: pd.DataFrame, spec: FeatureSpec) -> Split:
     )
 
 
-def prepare_datasets(parquet_dir: Path = PARQUET_DIR) -> PreparedData:
+def prepare_datasets(parquet_dir: Path = INITIAL_PARQUET_DIR) -> PreparedData:
     """Menyiapkan data pelatihan tier 1 dari Parquet sampai siap dipakai model.
 
     Pemetaan kategorikal dilatih hanya dari bagian train, lalu diterapkan ke ketiga
