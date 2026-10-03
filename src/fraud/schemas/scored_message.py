@@ -7,6 +7,8 @@ from pydantic import BaseModel
 from fraud.schemas.score_response import DecisionClass
 from fraud.schemas.transaction import Transaction
 
+SCORED_TOPIC = "scored"
+
 
 class ScoredMessage(BaseModel):
     """Isi pesan yang dititip ke message broker setelah satu transaksi diputuskan.

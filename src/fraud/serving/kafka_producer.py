@@ -14,9 +14,7 @@ from enum import Enum
 
 from confluent_kafka import KafkaError, KafkaException, Message, Producer
 
-from fraud.schemas.scored_message import ScoredMessage
-
-SCORED_TOPIC = "scored"
+from fraud.schemas.scored_message import SCORED_TOPIC, ScoredMessage
 
 # Jatah langkah titip pada anggaran latensi awal, direvisi setelah pengukuran Locust.
 DELIVERY_WAIT_SECONDS = 0.015
