@@ -181,7 +181,7 @@ def _is_str_annotation(annotation: object) -> bool:
     return get_origin(annotation) is types.UnionType and str in get_args(annotation)
 
 
-def _string_columns() -> list[str]:
+def string_columns() -> list[str]:
     """Kolom bertipe string menurut skema Transaction, wajib di-encode sebelum masuk model.
 
     Ini tidak mencakup seluruh kolom kategorikal: yang tersimpan numerik ada di
@@ -194,7 +194,7 @@ def _string_columns() -> list[str]:
     ]
 
 
-def _raw_input_columns() -> list[str]:
+def raw_input_columns() -> list[str]:
     """Kolom mentah yang menjadi input model, urutan mengikuti skema Transaction."""
     return [name for name in Transaction.model_fields if name not in EXCLUDED_RAW_COLUMNS]
 
@@ -234,9 +234,9 @@ def prepare_datasets(
         engineered_columns += WINDOW_FEATURE_NAMES
     train_part, validation_part, test_part = split_temporal(df)
 
-    encoded_columns = _string_columns()
+    encoded_columns = string_columns()
     spec = FeatureSpec(
-        input_columns=engineered_columns + _raw_input_columns(),
+        input_columns=engineered_columns + raw_input_columns(),
         encoded_columns=encoded_columns,
         nominal_numeric_columns=list(NUMERIC_CATEGORICAL_COLUMNS),
         category_mappings=fit_category_mappings(train_part, encoded_columns),
