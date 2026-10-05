@@ -7,6 +7,7 @@ fungsi yang sama dengan jalur scoring real-time, bukan implementasi kedua.
 """
 
 import types
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import get_args, get_origin
@@ -25,12 +26,16 @@ from fraud.features.encoding import (
     fit_category_mappings,
 )
 from fraud.features.offline_store import INITIAL_PARQUET_DIR, LABEL_COLUMN, PARTITION_COLUMN
+from fraud.features.online_store import SEQUENCE_RETENTION_LIMIT
+from fraud.features.window import WindowFeatures, window_features
 from fraud.schemas.transaction import Transaction
 
 # Pengenal, waktu mentah, dan kunci entitas (perilakunya sudah diwakili fitur agregat).
 EXCLUDED_RAW_COLUMNS = ("TransactionID", "TransactionDT", "card1")
 
 AGGREGATE_FEATURE_NAMES = list(AggregateFeatures.__annotations__)
+
+WINDOW_FEATURE_NAMES = list(WindowFeatures.__annotations__)
 
 # Kode nominal yang tersimpan numerik: nilainya pengenal, bukan besaran yang punya urutan.
 NUMERIC_CATEGORICAL_COLUMNS = (
@@ -127,6 +132,34 @@ def add_aggregate_features(df: pd.DataFrame) -> pd.DataFrame:
     return df.assign(**columns)
 
 
+def add_window_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Menambahkan fitur jendela waktu per baris, dihitung hanya dari transaksi sebelumnya.
+
+    Args:
+        df: Transaksi urut kronologis (hasil `load_transactions`).
+
+    Returns:
+        DataFrame baru dengan satu kolom tambahan per nama di `WINDOW_FEATURE_NAMES`.
+    """
+    # Histori lebih panjang dari batas retensi tidak pernah dibaca `window_features`.
+    histories: dict[int, deque[tuple[int, float]]] = {}
+    columns: dict[str, list] = {name: [] for name in WINDOW_FEATURE_NAMES}
+
+    rows = zip(
+        df["card1"].to_numpy(),
+        df["TransactionAmt"].to_numpy(),
+        df["TransactionDT"].to_numpy(),
+    )
+    for card1, amt, dt in rows:
+        history = histories.setdefault(int(card1), deque(maxlen=SEQUENCE_RETENTION_LIMIT))
+        features = window_features(history, int(dt))
+        history.append((int(dt), float(amt)))
+        for name, value in features.items():
+            columns[name].append(value)
+
+    return df.assign(**columns)
+
+
 def split_temporal(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Memotong data urut kronologis menjadi train, validasi, dan uji (60-20-20).
 
@@ -178,7 +211,9 @@ def _to_split(part: pd.DataFrame, spec: FeatureSpec) -> Split:
     )
 
 
-def prepare_datasets(parquet_dir: Path = INITIAL_PARQUET_DIR) -> PreparedData:
+def prepare_datasets(
+    parquet_dir: Path = INITIAL_PARQUET_DIR, with_window_features: bool = False
+) -> PreparedData:
     """Menyiapkan data pelatihan tier 1 dari Parquet sampai siap dipakai model.
 
     Pemetaan kategorikal dilatih hanya dari bagian train, lalu diterapkan ke ketiga
@@ -186,16 +221,22 @@ def prepare_datasets(parquet_dir: Path = INITIAL_PARQUET_DIR) -> PreparedData:
 
     Args:
         parquet_dir: Folder Parquet partisi per hari hasil pemuatan data awal.
+        with_window_features: True untuk menambahkan fitur jendela waktu tepat setelah fitur
+            agregat. Bawaannya False, kontrak input model produksi versi 1.
 
     Returns:
         Tiga split dan `FeatureSpec` yang menjelaskan kolom serta pemetaan inputnya.
     """
     df = add_aggregate_features(load_transactions(parquet_dir))
+    engineered_columns = list(AGGREGATE_FEATURE_NAMES)
+    if with_window_features:
+        df = add_window_features(df)
+        engineered_columns += WINDOW_FEATURE_NAMES
     train_part, validation_part, test_part = split_temporal(df)
 
     encoded_columns = _string_columns()
     spec = FeatureSpec(
-        input_columns=AGGREGATE_FEATURE_NAMES + _raw_input_columns(),
+        input_columns=engineered_columns + _raw_input_columns(),
         encoded_columns=encoded_columns,
         nominal_numeric_columns=list(NUMERIC_CATEGORICAL_COLUMNS),
         category_mappings=fit_category_mappings(train_part, encoded_columns),
