@@ -25,6 +25,22 @@ dependencies = [
     "xgboost>=3.4.1",
 ]
 
+# PyTorch hanya untuk pelatihan dan ekspor tier 2; image serving dipasang tanpa grup ini.
+[dependency-groups]
+train = [
+    "torch>=2.14.1",
+    "onnxscript>=0.7.2",
+    "seaborn>=0.13.2",
+]
+# Kernel untuk notebook lokal; tanpa grup ini setiap `uv sync` menghapusnya.
+notebook = [
+    "ipykernel>=7.4.0",
+]
+
+[tool.uv]
+# `uv sync` menghapus paket di luar grup yang diminta, jadi tanpa ini setiap sync membuang torch.
+default-groups = ["train", "notebook"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
