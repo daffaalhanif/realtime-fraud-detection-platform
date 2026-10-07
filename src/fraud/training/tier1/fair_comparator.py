@@ -16,7 +16,6 @@ Dijalankan lewat:
 
 import argparse
 import json
-import os
 import statistics
 import time
 from pathlib import Path
@@ -25,16 +24,13 @@ from typing import Any
 import mlflow
 import mlflow.lightgbm as mlflow_lightgbm
 import numpy as np
-from dotenv import load_dotenv
 from lightgbm import LGBMClassifier
 from mlflow import artifacts as mlflow_artifacts
 from sklearn.metrics import average_precision_score, roc_auc_score
 
 from fraud.training.tier1.candidates import RANDOM_SEED, parent_run
 from fraud.training.tier1.dataset import WINDOW_FEATURE_NAMES, Split, prepare_datasets
-
-EXPERIMENT_NAME = "tier2-hypothesis"
-SMOKE_EXPERIMENT_NAME = "tier2-hypothesis-smoke"
+from fraud.training.tier2.tracking import setup_mlflow
 
 CANDIDATE = "lightgbm"
 THRESHOLDS_PATH = Path("configs/tier1_thresholds.json")
@@ -48,14 +44,6 @@ SMOKE_ROW_LIMIT = 30_000
 # Dua seed cukup untuk membuktikan simpangan baku bisa dihitung; pohon dikurangi supaya cepat.
 SMOKE_SEED_COUNT = 2
 SMOKE_N_ESTIMATORS = 50
-
-
-def setup_mlflow(smoke: bool) -> str:
-    """Menyambungkan ke server MLflow dan memilih eksperimen, mengembalikan id eksperimennya."""
-    load_dotenv()
-    mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
-    experiment = mlflow.set_experiment(SMOKE_EXPERIMENT_NAME if smoke else EXPERIMENT_NAME)
-    return experiment.experiment_id
 
 
 def production_source_params(thresholds_path: Path = THRESHOLDS_PATH) -> tuple[str, dict]:

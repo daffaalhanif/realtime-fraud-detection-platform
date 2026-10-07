@@ -74,6 +74,8 @@ class TransactionTokenizer(nn.Module):
     vocabulary (`mask_codes`) untuk field yang disamarkan saat pretraining.
     """
 
+    mask_codes: torch.Tensor
+
     def __init__(self, spec: SequenceSpec, config: Tier2Config) -> None:
         super().__init__()
         vocab_sizes = category_vocab_sizes(spec)
