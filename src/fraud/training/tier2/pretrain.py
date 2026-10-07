@@ -59,6 +59,9 @@ SPEC_ARTIFACT = "sequence_spec.json"
 
 LOSS_PARTS = ("categorical", "numeric", "missing")
 
+# Run pemilihan konfigurasi dipisah dari pengulangan pengujian supaya evaluasi tidak tertukar.
+PURPOSES = ("selection", "main")
+
 
 @dataclass(frozen=True)
 class MaskedInputs:
@@ -287,13 +290,14 @@ def run_pretraining(
     return best_state, best_epoch, best_loss
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Pretraining self-supervised model tier 2.")
+def add_run_arguments(parser: argparse.ArgumentParser) -> None:
+    """Argumen satu run lengan tier 2, dipakai bersama `pretrain` dan `finetune pipeline`."""
     parser.add_argument(
         "--arm", required=True, choices=SEQUENCE_MODES, help="Mode sequence lengan."
     )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--seq-len", type=int, required=True, help="Panjang sequence.")
+    parser.add_argument("--purpose", choices=PURPOSES, default="main", help="Peran run.")
     parser.add_argument("--parquet-dir", type=Path, default=INITIAL_PARQUET_DIR)
     defaults = Tier2Config()
     parser.add_argument("--d-model", type=int, default=defaults.d_model)
@@ -305,33 +309,63 @@ def main() -> None:
         action="store_true",
         help="Uji cepat: data, model, dan epoch dipotong, dicatat di eksperimen terpisah.",
     )
-    args = parser.parse_args()
 
+
+def run_settings(args: argparse.Namespace) -> tuple[Tier2Config, int, int | None]:
+    """Konfigurasi model, batas epoch, dan batas baris dari argumen `add_run_arguments`."""
     if args.smoke:
-        config, max_epochs, row_limit = SMOKE_CONFIG, SMOKE_MAX_EPOCHS, SMOKE_ROW_LIMIT
-    else:
-        config = Tier2Config(
-            d_model=args.d_model, n_layers=args.n_layers, n_heads=args.n_heads, d_ff=args.d_ff
-        )
-        max_epochs, row_limit = MAX_EPOCHS, None
+        return SMOKE_CONFIG, SMOKE_MAX_EPOCHS, SMOKE_ROW_LIMIT
+    config = Tier2Config(
+        d_model=args.d_model, n_layers=args.n_layers, n_heads=args.n_heads, d_ff=args.d_ff
+    )
+    return config, MAX_EPOCHS, None
 
-    setup_mlflow(args.smoke)
-    device = select_device()
-    print(f"Menyiapkan data dari {args.parquet_dir} untuk device {device} ...", flush=True)
-    data = prepare_sequence_data(args.parquet_dir, row_limit).to(device)
 
-    arm = f"t2_{args.arm}"
-    run_name = f"{arm}-{STAGE}-L{args.seq_len}-seed{args.seed}"
+def pretrain_and_log(
+    data: SequenceData,
+    mode: str,
+    seed: int,
+    seq_len: int,
+    config: Tier2Config,
+    max_epochs: int,
+    purpose: str,
+    row_limit: int | None,
+) -> str:
+    """Menjalankan satu pretraining sebagai run MLflow baru, lengkap dengan artefaknya.
+
+    Args:
+        data: Data ter-encode, sudah di device pelatihan.
+        mode: Mode sequence lengan, salah satu `SEQUENCE_MODES`.
+        seed: Seed pengulangan, dipakai juga oleh fine-tuning lanjutannya.
+        seq_len: Panjang sequence termasuk transaksi yang dinilai.
+        config: Ukuran arsitektur.
+        max_epochs: Batas atas epoch sebelum early stopping.
+        purpose: `selection` untuk pemilihan konfigurasi, `main` untuk pengulangan pengujian.
+        row_limit: Batas baris yang dipakai menyiapkan `data`, dicatat supaya fine-tuning
+            membangun data yang sama.
+
+    Returns:
+        Id run pretraining, masukan fine-tuning.
+    """
+    arm = f"t2_{mode}"
+    run_name = f"{arm}-{STAGE}-L{seq_len}-seed{seed}"
     with mlflow.start_run(run_name=run_name) as run:
         mlflow.set_tags(
-            {"arm": arm, "stage": STAGE, "seed": str(args.seed), "seq_len": str(args.seq_len)}
+            {
+                "arm": arm,
+                "stage": STAGE,
+                "purpose": purpose,
+                "seed": str(seed),
+                "seq_len": str(seq_len),
+            }
         )
         mlflow.log_params(
             {
                 **config.to_dict(),
-                "mode": args.arm,
-                "seq_len": args.seq_len,
-                "seed": args.seed,
+                "mode": mode,
+                "seq_len": seq_len,
+                "seed": seed,
+                "row_limit": row_limit,
                 "mask_rate": MASK_RATE,
                 "learning_rate": LEARNING_RATE,
                 "weight_decay": WEIGHT_DECAY,
@@ -340,7 +374,7 @@ def main() -> None:
                 "batch_size": BATCH_SIZE,
                 "max_epochs": max_epochs,
                 "patience": PATIENCE,
-                "device": device.type,
+                "device": data.numeric.device.type,
                 "n_train_samples": len(data.split_rows["train"]),
                 "n_validation_samples": len(data.split_rows["validation"]),
             }
@@ -349,7 +383,7 @@ def main() -> None:
         mlflow.log_dict(dict(data.spec), SPEC_ARTIFACT)
 
         best_state, best_epoch, best_loss = run_pretraining(
-            data, args.arm, args.seed, args.seq_len, config, max_epochs
+            data, mode, seed, seq_len, config, max_epochs
         )
         mlflow.log_metrics({"best_validation_total": best_loss, "best_epoch": best_epoch})
         with tempfile.TemporaryDirectory() as directory:
@@ -357,9 +391,25 @@ def main() -> None:
             torch.save(best_state, path)
             mlflow.log_artifact(str(path))
     print(
-        f"Selesai. Epoch terbaik {best_epoch}, loss validasi {best_loss:.4f}.\n"
-        f"Run id pretraining (untuk fine-tuning): {run.info.run_id}",
+        f"Pretraining selesai. Epoch terbaik {best_epoch}, loss validasi {best_loss:.4f}, "
+        f"run id {run.info.run_id}",
         flush=True,
+    )
+    return run.info.run_id
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Pretraining self-supervised model tier 2.")
+    add_run_arguments(parser)
+    args = parser.parse_args()
+    config, max_epochs, row_limit = run_settings(args)
+
+    setup_mlflow(args.smoke)
+    device = select_device()
+    print(f"Menyiapkan data dari {args.parquet_dir} untuk device {device} ...", flush=True)
+    data = prepare_sequence_data(args.parquet_dir, row_limit).to(device)
+    pretrain_and_log(
+        data, args.arm, args.seed, args.seq_len, config, max_epochs, args.purpose, row_limit
     )
 
 
