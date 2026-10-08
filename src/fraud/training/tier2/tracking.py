@@ -25,10 +25,20 @@ def setup_mlflow(smoke: bool) -> str:
 
     Raises:
         KeyError: `MLFLOW_TRACKING_URI` tidak diset.
+        ValueError: `MLFLOW_TRACKING_URI` bukan satu alamat server http(s).
     """
     load_dotenv()
-    # Tanpa URI eksplisit MLflow diam-diam membuat penyimpanan lokal baru di folder kerja.
-    mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
+    tracking_uri = os.environ["MLFLOW_TRACKING_URI"]
+    # URI yang bukan alamat http(s) dibaca MLflow sebagai folder lokal, sehingga run tersimpan di
+    # mesin pelatihan dan hilang bersamanya; nilai tempelan dengan spasi atau baris baru juga gagal.
+    if not tracking_uri.startswith(("http://", "https://")) or any(
+        character.isspace() for character in tracking_uri
+    ):
+        raise ValueError(
+            "MLFLOW_TRACKING_URI harus satu alamat http:// atau https:// tanpa spasi maupun "
+            "baris baru."
+        )
+    mlflow.set_tracking_uri(tracking_uri)
     experiment = mlflow.set_experiment(SMOKE_EXPERIMENT_NAME if smoke else EXPERIMENT_NAME)
     return experiment.experiment_id
 
