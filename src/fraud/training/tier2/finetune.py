@@ -74,15 +74,36 @@ SELECTION_SIZES = {
 _SIZE_PARAMS = ("d_model", "n_layers", "n_heads", "d_ff")
 
 
-def _load_pretraining(run_id: str) -> tuple[Run, Tier2Config, dict, dict[str, torch.Tensor]]:
-    """Run, konfigurasi, kontrak elemen, dan bobot sebuah run pretraining."""
+def load_run_package(
+    run_id: str, checkpoint_artifact: str
+) -> tuple[Run, Tier2Config, dict, dict[str, torch.Tensor]]:
+    """Run, konfigurasi, kontrak elemen, dan bobot sebuah run pretraining atau fine-tuning.
+
+    Args:
+        run_id: Run yang mencatat konfigurasi, kontrak elemen, dan checkpoint.
+        checkpoint_artifact: Nama berkas checkpoint di run itu.
+    """
     run = mlflow.MlflowClient().get_run(run_id)
     with tempfile.TemporaryDirectory() as directory:
         local = Path(mlflow_artifacts.download_artifacts(run_id=run_id, dst_path=directory))
         config = Tier2Config(**json.loads((local / CONFIG_ARTIFACT).read_text()))
         spec = json.loads((local / SPEC_ARTIFACT).read_text())
-        state = torch.load(local / PRETRAIN_CHECKPOINT_ARTIFACT)
+        state = torch.load(local / checkpoint_artifact)
     return run, config, spec, state
+
+
+def ensure_same_spec(data: SequenceData, spec: dict, run_id: str) -> None:
+    """Menolak data yang kontrak elemennya berbeda dari kontrak saat bobot dilatih.
+
+    Raises:
+        ValueError: Kontrak berbeda, misalnya karena Parquet yang dibaca bukan salinan yang sama.
+    """
+    # Dibandingkan lewat JSON karena kontrak tersimpan sudah melewati serialisasi JSON.
+    if json.loads(json.dumps(dict(data.spec))) != spec:
+        raise ValueError(
+            f"Kontrak elemen data berbeda dari run {run_id}; kode kategori atau statistik "
+            "normalisasi tidak lagi cocok dengan bobotnya."
+        )
 
 
 def _logits(model: Tier2Model, batch: SequenceBatch) -> torch.Tensor:
@@ -210,17 +231,13 @@ def finetune_and_log(pretrain_run_id: str, data: SequenceData, max_epochs: int) 
         Id run fine-tuning.
 
     Raises:
-        ValueError: Kontrak elemen data berbeda dari kontrak saat pretraining, misalnya karena
-            Parquet yang dibaca bukan salinan yang sama.
+        ValueError: Kontrak elemen data berbeda dari kontrak saat pretraining.
     """
-    pretrain_run, config, spec, state = _load_pretraining(pretrain_run_id)
+    pretrain_run, config, spec, state = load_run_package(
+        pretrain_run_id, PRETRAIN_CHECKPOINT_ARTIFACT
+    )
     params = pretrain_run.data.params
-    # Dibandingkan lewat JSON karena kontrak pretraining sudah melewati serialisasi JSON.
-    if json.loads(json.dumps(dict(data.spec))) != spec:
-        raise ValueError(
-            f"Kontrak elemen data berbeda dari pretraining {pretrain_run_id}; kode kategori "
-            "atau statistik normalisasi tidak lagi cocok dengan bobotnya."
-        )
+    ensure_same_spec(data, spec, pretrain_run_id)
     mode, seed, seq_len = params["mode"], int(params["seed"]), int(params["seq_len"])
     purpose = pretrain_run.data.tags["purpose"]
 
