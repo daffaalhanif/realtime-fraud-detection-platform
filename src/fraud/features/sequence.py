@@ -29,6 +29,15 @@ MIN_CATEGORY_COUNT = 100
 # panjang sequence. Rentang dataset kurang dari setahun.
 ELAPSED_LOG_SCALE = math.log1p(365 * 86_400)
 
+# Kolom yang konstan di training bisa menghasilkan simpangan baku sekecil galat pembulatan float,
+# bukan nol persis; pembagian dengannya membuat nilai di periode lain meledak.
+CONSTANT_STD_TOLERANCE = 1e-6
+
+# Nilai langka pada kolom yang hampir konstan menjadi sekitar 1/sqrt(peluangnya) setelah
+# distandardisasi. Dibatasi supaya kejadian yang lebih jarang dari sekitar 1% tidak mendominasi
+# proyeksi input, tanpa menghilangkan tanda maupun jaraknya dari nilai umum.
+STANDARDIZED_CLIP = 10.0
+
 
 class SequenceSpec(TypedDict):
     """Kontrak elemen sequence model tier 2, disimpan sebagai artefak bersama model.
@@ -42,6 +51,7 @@ class SequenceSpec(TypedDict):
         numeric_std: Simpangan baku nilai numerik setelah log bertanda, per kolom numerik.
         min_category_count: Batas kemunculan minimal kategori di data training.
         elapsed_log_scale: Pembagi log1p jarak waktu antar transaksi.
+        standardized_clip: Batas mutlak nilai numerik setelah distandardisasi.
     """
 
     categorical_columns: list[str]
@@ -51,6 +61,7 @@ class SequenceSpec(TypedDict):
     numeric_std: list[float]
     min_category_count: int
     elapsed_log_scale: float
+    standardized_clip: float
 
 
 @dataclass(frozen=True)
@@ -120,7 +131,7 @@ def fit_sequence_spec(
     std = np.nanstd(transformed, axis=0)
     # Kolom yang seluruhnya kosong atau konstan di training tidak boleh menghasilkan NaN.
     mean = np.where(np.isnan(mean), 0.0, mean)
-    std = np.where(np.isnan(std) | (std == 0), 1.0, std)
+    std = np.where(np.isnan(std) | (std < CONSTANT_STD_TOLERANCE), 1.0, std)
 
     return SequenceSpec(
         categorical_columns=list(categorical_columns),
@@ -130,6 +141,7 @@ def fit_sequence_spec(
         numeric_std=std.tolist(),
         min_category_count=MIN_CATEGORY_COUNT,
         elapsed_log_scale=ELAPSED_LOG_SCALE,
+        standardized_clip=STANDARDIZED_CLIP,
     )
 
 
@@ -158,7 +170,8 @@ def encode_transactions(
     standardized = (_signed_log1p(raw) - np.asarray(spec["numeric_mean"])) / np.asarray(
         spec["numeric_std"]
     )
-    numeric = np.where(missing, 0.0, standardized).astype(np.float32)
+    clip = spec["standardized_clip"]
+    numeric = np.where(missing, 0.0, np.clip(standardized, -clip, clip)).astype(np.float32)
 
     categorical_names = spec["categorical_columns"]
     categorical = np.empty((len(raw), len(categorical_names)), dtype=np.int64)
