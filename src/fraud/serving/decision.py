@@ -19,17 +19,19 @@ from typing import Any, cast
 import numpy as np
 import redis
 
-from fraud.features.aggregate import AggregateFeatures, AggregateState, process_transaction
+from fraud.features.aggregate import AggregateState, process_transaction
 from fraud.features.cold_start import get_default_state
 from fraud.features.encoding import FeatureSpec, build_model_input
 from fraud.features.online_store import (
     SEQUENCE_RETENTION_LIMIT,
     aggregate_key,
+    parse_sequence_entries,
     sequence_entry,
     sequence_key,
     state_from_hash,
     state_to_hash,
 )
+from fraud.features.window import requires_window_features, window_features
 from fraud.schemas.score_response import DecisionClass, ScoreResponse
 from fraud.schemas.scored_message import ScoredMessage
 from fraud.schemas.transaction import Transaction
@@ -124,13 +126,7 @@ def decide(
         trace.mark("already_decided", True)
         return previous
 
-    with trace.step("redis_read"):
-        state = _load_state(redis_client, transaction.card1)
-    with trace.step("feature_compute"):
-        features, _ = process_transaction(
-            state, transaction.TransactionAmt, transaction.TransactionDT
-        )
-        model_input = _model_input(transaction, features, model.feature_spec)
+    model_input = _features_for(transaction, model.feature_spec, redis_client, trace)
     with trace.step("tier1_score"):
         score = model.score(model_input)
         decision = classify(score, model.thresholds)
@@ -162,19 +158,54 @@ def decide(
     return response
 
 
-def _load_state(redis_client: redis.Redis, card1: int) -> AggregateState:
-    """State agregat terakhir kunci entitas, atau nilai default kalau belum pernah tercatat."""
-    raw = cast(dict[Any, Any], redis_client.hgetall(aggregate_key(card1)))
-    state = state_from_hash(raw)
-    return get_default_state() if state is None else state
+def _read_entity(
+    redis_client: redis.Redis, card1: int, with_history: bool
+) -> tuple[AggregateState, list[Any]]:
+    """State agregat kunci entitas dan, bila diminta, elemen sequence terakhirnya.
+
+    Keduanya diambil dalam satu kiriman supaya hanya ada satu perjalanan jaringan ke Redis.
+
+    Returns:
+        State agregat (default kalau entitas belum pernah tercatat) dan elemen Redis LIST,
+        kosong kalau `with_history` False.
+    """
+    if with_history:
+        with redis_client.pipeline(transaction=False) as pipe:
+            pipe.hgetall(aggregate_key(card1))
+            pipe.lrange(sequence_key(card1), -SEQUENCE_RETENTION_LIMIT, -1)
+            raw_state, raw_history = pipe.execute()
+    else:
+        raw_state, raw_history = redis_client.hgetall(aggregate_key(card1)), []
+    state = state_from_hash(cast(dict[Any, Any], raw_state))
+    return (get_default_state() if state is None else state), list(raw_history)
 
 
-def _model_input(
-    transaction: Transaction, features: AggregateFeatures, spec: FeatureSpec
+def _features_for(
+    transaction: Transaction, spec: FeatureSpec, redis_client: redis.Redis, trace: RequestTrace
 ) -> np.ndarray:
-    """Menyusun vektor input model satu baris dari transaksi dan fitur agregatnya."""
-    values = {**transaction.model_dump(), **features}
-    return build_model_input({name: [values[name]] for name in spec["input_columns"]}, spec)
+    """Vektor input model satu transaksi, persis sesuai kontrak input versi model yang aktif.
+
+    Fitur jendela waktu hanya dihitung, dan sequence hanya dibaca dari Redis, kalau kontrak
+    input memintanya; versi model tanpa fitur itu tidak menanggung biayanya.
+    """
+    with_history = requires_window_features(spec["input_columns"])
+    with trace.step("redis_read"):
+        state, raw_history = _read_entity(redis_client, transaction.card1, with_history)
+    values: dict[str, Any] = transaction.model_dump()
+    if with_history:
+        with trace.step("window_features"):
+            history = [
+                (int(entry["TransactionDT"]), float(entry["TransactionAmt"]))
+                for entry in parse_sequence_entries(raw_history)
+            ]
+            values.update(window_features(history, transaction.TransactionDT))
+        trace.mark("history_length", len(history))
+    with trace.step("feature_compute"):
+        features, _ = process_transaction(
+            state, transaction.TransactionAmt, transaction.TransactionDT
+        )
+        values.update(features)
+        return build_model_input({name: [values[name]] for name in spec["input_columns"]}, spec)
 
 
 def _fold_into_online_store(redis_client: redis.Redis, transaction: Transaction) -> int:

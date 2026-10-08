@@ -8,7 +8,7 @@ Modul ini hanya mengatur format, tanpa membuka koneksi Redis.
 
 import json
 import math
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 import numpy as np
@@ -92,3 +92,15 @@ def sequence_entry(fields: Mapping[str, Any]) -> str:
         JSON satu transaksi dengan urutan field mengikuti skema `Transaction`.
     """
     return json.dumps({name: _to_json_value(fields[name]) for name in _SEQUENCE_FIELDS})
+
+
+def parse_sequence_entries(raw_entries: Iterable[bytes | str]) -> list[dict[str, Any]]:
+    """Mengurai elemen Redis LIST hasil `sequence_entry` kembali menjadi data per transaksi.
+
+    Args:
+        raw_entries: Elemen `LRANGE`, bytes maupun str, urutan dipertahankan.
+
+    Returns:
+        Satu dict per transaksi dengan field skema `Transaction`; nilai kosong berupa `None`.
+    """
+    return [json.loads(entry) for entry in raw_entries]
