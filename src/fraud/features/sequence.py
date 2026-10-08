@@ -200,3 +200,71 @@ def encode_elapsed(elapsed_seconds: np.ndarray, spec: SequenceSpec) -> np.ndarra
     """
     clipped = np.maximum(np.asarray(elapsed_seconds, dtype=np.float64), 0.0)
     return (np.log1p(clipped) / spec["elapsed_log_scale"]).astype(np.float32)
+
+
+@dataclass(frozen=True)
+class SequenceInput:
+    """Masukan model tier 2 untuk satu transaksi yang dinilai, siap untuk ONNX Runtime.
+
+    Attributes:
+        numeric: float32 `(1, L, kolom numerik)`.
+        missing: uint8 `(1, L, kolom numerik)`.
+        categorical: int64 `(1, L, kolom kategorikal)`.
+        elapsed: Jarak waktu ter-encode ke transaksi yang dinilai, float32 `(1, L)`.
+        padding_mask: True untuk posisi padding di kiri, bool `(1, L)`.
+    """
+
+    numeric: np.ndarray
+    missing: np.ndarray
+    categorical: np.ndarray
+    elapsed: np.ndarray
+    padding_mask: np.ndarray
+
+
+def assemble_sequence(
+    history: Sequence[Mapping[str, Any]],
+    current: Mapping[str, Any],
+    spec: SequenceSpec,
+    seq_len: int,
+) -> SequenceInput:
+    """Menyusun sequence satu transaksi yang dinilai dari histori kunci entitasnya.
+
+    Padanan satu sampel dari penyusunan batch saat pelatihan untuk urutan asli: paling banyak
+    `seq_len - 1` transaksi sebelumnya ditambah transaksi yang dinilai di posisi terakhir, padding
+    di kiri berisi nol dan kode kosong.
+
+    Args:
+        history: Transaksi sebelumnya pada kunci entitas yang sama, urut kronologis naik.
+        current: Transaksi yang sedang dinilai.
+        spec: Kontrak elemen sequence model.
+        seq_len: Panjang sequence model, termasuk transaksi yang dinilai.
+
+    Returns:
+        Masukan model berukuran batch satu.
+    """
+    # Indeks awal dibatasi nol: histori lebih pendek dari jendela akan membuat indeks negatif,
+    # yang di Python dihitung dari belakang dan diam-diam memotong histori.
+    start = max(0, len(history) - (seq_len - 1))
+    rows = [*history[start:], current]
+    columns = spec["categorical_columns"] + spec["numeric_columns"]
+    encoded = encode_transactions({name: [row[name] for row in rows] for name in columns}, spec)
+    elapsed = encode_elapsed(
+        np.array([current["TransactionDT"] - row["TransactionDT"] for row in rows]), spec
+    )
+
+    padding = seq_len - len(rows)
+    padding_mask = np.zeros((1, seq_len), dtype=bool)
+    padding_mask[0, :padding] = True
+
+    def left_pad(values: np.ndarray, fill: float) -> np.ndarray:
+        padded = np.full((1, seq_len, *values.shape[1:]), fill, dtype=values.dtype)
+        padded[0, padding:] = values
+        return padded
+
+    return SequenceInput(
+        numeric=left_pad(encoded.numeric, 0.0),
+        missing=left_pad(encoded.missing, 0),
+        categorical=left_pad(encoded.categorical, MISSING_CODE),
+        elapsed=left_pad(elapsed, 0.0),
+        padding_mask=padding_mask,
+    )
