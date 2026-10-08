@@ -407,11 +407,12 @@ def check_edge_cases() -> None:
         raise ValueError("Pemeriksaan kasus tepi gagal: " + "; ".join(problems))
 
 
-def load_registered_model(version: int) -> RegisteredModel:
+def load_registered_model(version: int, name: str = REGISTERED_MODEL_NAME) -> RegisteredModel:
     """Memuat satu versi model dari registry beserta ambang dan kontrak inputnya.
 
     Args:
         version: Nomor versi model terdaftar.
+        name: Nama model di registry.
 
     Returns:
         Sesi ONNX, kandidat, run kalibrasi asal, serta isi `thresholds.json` dan
@@ -420,7 +421,7 @@ def load_registered_model(version: int) -> RegisteredModel:
     with tempfile.TemporaryDirectory() as directory:
         path = Path(
             mlflow_artifacts.download_artifacts(
-                f"models:/{REGISTERED_MODEL_NAME}/{version}", dst_path=directory
+                f"models:/{name}/{version}", dst_path=directory
             )
         )
         thresholds = json.loads((path / "extra_files" / "thresholds.json").read_text())

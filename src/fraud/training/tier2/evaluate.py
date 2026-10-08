@@ -32,31 +32,49 @@ from pathlib import Path
 import mlflow
 import mlflow.lightgbm as mlflow_lightgbm
 import numpy as np
+import onnxruntime as ort
 import pandas as pd
 import seaborn as sns
 from lightgbm import LGBMClassifier
 from matplotlib.figure import Figure
+from mlflow import artifacts as mlflow_artifacts
 from mlflow.entities import Run
 from sklearn.metrics import average_precision_score, precision_recall_curve
 
 from fraud.features.offline_store import INITIAL_PARQUET_DIR, SECONDS_PER_DAY
+from fraud.features.window import requires_window_features
 from fraud.training.tier1.dataset import prepare_datasets
 from fraud.training.tier1.evaluate import (
     POSITION_SEGMENTS,
     SIZE_SEGMENTS,
+    load_registered_model,
     position_segment_keys,
+    predict_scores,
     size_segment_keys,
+)
+from fraud.training.tier1.export_onnx import (
+    REGISTERED_MODEL_NAME as TIER1_REGISTERED_NAME,
+    SMOKE_REGISTERED_MODEL_NAME as SMOKE_TIER1_REGISTERED_NAME,
 )
 from fraud.training.tier1.fair_comparator import ARMS as TIER1_ARMS
 from fraud.training.tier1.search_results import logged_model_uri
 from fraud.training.tier2.ablation_shuffle import arm_seq_len, latest_main_runs
-from fraud.training.tier2.dataset import SequenceData, prepare_sequence_data
+from fraud.training.tier2.dataset import (
+    SequenceData,
+    build_batch,
+    iterate_rows,
+    prepare_sequence_data,
+)
 from fraud.training.tier2.finetune import (
     CHECKPOINT_ARTIFACT as FINETUNE_CHECKPOINT_ARTIFACT,
     ensure_same_spec,
     load_run_package,
     predict,
     selected_configuration,
+)
+from fraud.training.tier2.export_onnx import (
+    REGISTERED_MODEL_NAME as TIER2_REGISTERED_NAME,
+    SMOKE_REGISTERED_MODEL_NAME as SMOKE_TIER2_REGISTERED_NAME,
 )
 from fraud.training.tier2.model import Tier2Model
 from fraud.training.tier2.pretrain import SMOKE_ROW_LIMIT
@@ -92,6 +110,7 @@ REFERENCE_TIER1_RUN_ID = "b4861e6a162a43648967cb4f442bac0c"
 ARM_COLORS = dict(zip(ARM_ORDER, ("#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4")))
 SURFACE_COLOR = "#fcfcfb"
 PR_CURVE_POINTS = 2000
+GRAY_ZONE_BATCH_SIZE = 4096
 
 
 @dataclass(frozen=True)
@@ -206,8 +225,10 @@ def weighted_average_precision(ranked: RankedScores, day_weights: np.ndarray) ->
     terpilih. Skor kembar diperlakukan sebagai satu ambang, sama seperti scikit-learn.
 
     Returns:
-        PR-AUC, atau NaN kalau bobot total fraud nol.
+        PR-AUC, atau NaN kalau tidak ada baris atau bobot total fraud nol.
     """
+    if not len(ranked.label):
+        return float("nan")
     weights = day_weights[ranked.day_index]
     true_positive = np.cumsum(weights * ranked.label)[ranked.group_end]
     false_positive = np.cumsum(weights * (1 - ranked.label))[ranked.group_end]
@@ -549,14 +570,210 @@ def _print_results(arm_values: dict[str, list[float]], results: list[ComparisonR
         )
 
 
+GRAY_ZONE_STAGE = "gray_zone"
+GRAY_ZONE_PATH = Path("configs/gray_zone.json")
+# Porsi volume validasi yang jatuh di zona abu-abu untuk tiap kandidat ambang bawah.
+GRAY_ZONE_FRACTIONS = (0.01, 0.02, 0.05, 0.10)
+GRAY_ZONE_RULE = (
+    "Ambang bawah sama dengan ambang review kalau tier 2 tidak unggul di pita mana pun "
+    "(selang bootstrap 95% selisih PR-AUC di dalam pita tidak seluruhnya di atas nol); "
+    "kalau ada yang unggul, dipilih pita terlebar yang unggul. Dihitung di split validasi."
+)
+
+
+def gray_zone_candidates(
+    score: np.ndarray, reject: float, review: float
+) -> list[tuple[str, float]]:
+    """Kandidat ambang bawah: ambang review dan ambang yang mencakup porsi volume tertentu.
+
+    Skor terkalibrasi berbentuk tangga, jadi tiap kandidat porsi adalah nilai skor terbesar yang
+    membuat pita `[ambang, reject)` mencakup paling sedikit porsi itu.
+    """
+    values, counts = np.unique(score[score < reject], return_counts=True)
+    values, counts = values[::-1], counts[::-1]
+    covered = np.cumsum(counts) / len(score)
+    candidates = [("review", review)]
+    for fraction in GRAY_ZONE_FRACTIONS:
+        index = min(int(np.searchsorted(covered, fraction)), len(values) - 1)
+        candidates.append((f"{fraction:.0%}", float(values[index])))
+    return candidates
+
+
+def tier2_registry_scores(
+    name: str, version: int, data: SequenceData, split: str
+) -> tuple[np.ndarray, str]:
+    """Logit model tier 2 terdaftar untuk transaksi di split, urut `data.split_rows[split]`.
+
+    Memakai graf ONNX dari registry, artefak yang sama dengan yang dimuat serving.
+
+    Returns:
+        Logit dan penanda versi `nama/versi`.
+    """
+    with tempfile.TemporaryDirectory() as directory:
+        package = Path(
+            mlflow_artifacts.download_artifacts(f"models:/{name}/{version}", dst_path=directory)
+        )
+        spec = json.loads((package / "extra_files" / "sequence_spec.json").read_text())
+        info = json.loads((package / "extra_files" / "export_info.json").read_text())
+        session = ort.InferenceSession(
+            (package / "model.onnx").read_bytes(), providers=["CPUExecutionProvider"]
+        )
+    ensure_same_spec(data, spec, f"{name}/{version}")
+    logits = []
+    for rows in iterate_rows(data.split_rows[split], GRAY_ZONE_BATCH_SIZE, shuffle=False):
+        batch = build_batch(data, rows, info["seq_len"], info["mode"])
+        feeds = {
+            field: getattr(batch, field).cpu().numpy()
+            for field in ("numeric", "missing", "categorical", "elapsed", "padding_mask")
+        }
+        logits.append(np.asarray(session.run(None, feeds)[0]))
+    return np.concatenate(logits), f"{name}/{version}"
+
+
+def tier1_registry_scores(name: str, version: int, rows: EvaluationRows) -> tuple[np.ndarray, dict]:
+    """Skor terkalibrasi model tier 1 terdaftar untuk baris evaluasi, beserta ambangnya.
+
+    Baris dipilih lewat `TransactionID` dari gabungan ketiga split, sehingga tetap sejajar walau
+    data tier 2 dipotong berbeda pada mode smoke.
+    """
+    model = load_registered_model(version, name)
+    prepared = prepare_datasets(
+        with_window_features=requires_window_features(model.feature_spec["input_columns"])
+    )
+    parts = (prepared.train, prepared.validation, prepared.test)
+    features = pd.concat([part.features for part in parts])
+    features.index = pd.concat([part.entity_key["TransactionID"] for part in parts]).to_numpy()
+    score = predict_scores(model, features.loc[rows.transaction_id])
+    return score, model.thresholds["thresholds"]
+
+
+def _finite_or_none(value: float) -> float | None:
+    # NaN bukan JSON yang sah; pita tanpa transaksi atau tanpa fraud dicatat sebagai kosong.
+    return value if np.isfinite(value) else None
+
+
+def run_gray_zone(args: argparse.Namespace) -> None:
+    """Memilih ambang bawah zona abu-abu untuk satu versi tier 1 dan menyimpannya."""
+    tier1_name = SMOKE_TIER1_REGISTERED_NAME if args.smoke else TIER1_REGISTERED_NAME
+    tier2_name = SMOKE_TIER2_REGISTERED_NAME if args.smoke else TIER2_REGISTERED_NAME
+    setup_mlflow(args.smoke)
+    data = prepare_sequence_data(args.parquet_dir, SMOKE_ROW_LIMIT if args.smoke else None)
+    # Device sama dengan evaluasi utama. Di macOS, operasi torch di CPU setelah LightGBM termuat
+    # bisa crash karena keduanya membawa pustaka OpenMP sendiri.
+    data = data.to(select_device())
+    rows = evaluation_rows(data, "validation")
+    tier2_score, tier2_model = tier2_registry_scores(
+        tier2_name, args.tier2_version, data, "validation"
+    )
+    tier1_score, thresholds = tier1_registry_scores(tier1_name, args.tier1_version, rows)
+    reject, review = thresholds["reject"], thresholds["review"]
+
+    resamples = _day_resamples(rows.n_days)
+    tier1 = ArmScores("tier1", [0], [], tier1_score[None, :])
+    tier2 = ArmScores("tier2", [0], [], tier2_score[None, :])
+    bands = []
+    for label, lower in gray_zone_candidates(tier1_score, reject, review):
+        mask = (tier1_score >= lower) & (tier1_score < reject)
+        spec = ComparisonSpec(f"gray_zone_{label}", "tier2", "tier1", GRAY_ZONE_STAGE)
+        result = compare(spec, label, tier2, tier1, rows, mask, resamples)
+        bands.append(
+            {
+                "label": label,
+                "lower": lower,
+                "fraction": float(mask.mean()),
+                "n_rows": result.n_rows,
+                "n_fraud": result.n_fraud,
+                "pr_auc_tier1": _finite_or_none(result.baseline_mean),
+                "pr_auc_tier2": _finite_or_none(result.challenger_mean),
+                "margin": _finite_or_none(result.margin),
+                "ci_low": result.ci_low,
+                "ci_high": result.ci_high,
+            }
+        )
+
+    superior = [band for band in bands if band["ci_low"] is not None and band["ci_low"] > 0]
+    selected = (
+        max(superior, key=lambda band: band["fraction"])
+        if superior
+        else next(band for band in bands if band["label"] == "review")
+    )
+    print(f"\nZona abu-abu tier 1 {tier1_name}/{args.tier1_version} (reject {reject:.4f}):")
+    print(
+        f"  {'pita':>7s} {'lower':>8s} {'porsi':>7s} {'fraud':>6s} {'PR-AUC t1':>10s} "
+        f"{'PR-AUC t2':>10s} {'selang 95% selisih':>22s}"
+    )
+    for band in bands:
+        interval = (
+            f"[{band['ci_low']:+.4f}, {band['ci_high']:+.4f}]"
+            if band["ci_low"] is not None
+            else "[-]"
+        )
+        tier1_text, tier2_text = (
+            f"{band[key]:10.4f}" if band[key] is not None else f"{'-':>10s}"
+            for key in ("pr_auc_tier1", "pr_auc_tier2")
+        )
+        print(
+            f"  {band['label']:>7s} {band['lower']:8.4f} {band['fraction']:7.2%} "
+            f"{band['n_fraud']:6d} {tier1_text} {tier2_text} {interval:>22s}"
+        )
+    print(f"Terpilih: pita {selected['label']}, ambang bawah {selected['lower']:.4f}")
+
+    path = Path(tempfile.mkdtemp()) / GRAY_ZONE_PATH.name if args.smoke else GRAY_ZONE_PATH
+    with mlflow.start_run(run_name=f"{GRAY_ZONE_STAGE}-validation") as run:
+        mlflow.set_tags({"stage": GRAY_ZONE_STAGE, "split": "validation"})
+        mlflow.log_params(
+            {
+                "tier1_model": f"{tier1_name}/{args.tier1_version}",
+                "tier2_model": tier2_model,
+                "selected_band": selected["label"],
+            }
+        )
+        mlflow.log_metrics(
+            {
+                "selected_lower": selected["lower"],
+                "selected_fraction": selected["fraction"],
+                **{
+                    f"band_{band['label'].rstrip('%')}_margin": band["margin"]
+                    for band in bands
+                    if band["margin"] is not None
+                },
+            }
+        )
+        existing = json.loads(path.read_text()) if path.exists() else {}
+        existing[f"{tier1_name}/{args.tier1_version}"] = {
+            "lower": selected["lower"],
+            "selected_band": selected["label"],
+            "rule": GRAY_ZONE_RULE,
+            "tier2_model": tier2_model,
+            "evaluation_run_id": run.info.run_id,
+            "bands": bands,
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(existing, indent=2, ensure_ascii=False) + "\n")
+        mlflow.log_artifact(str(path))
+    print(f"Ditulis ke {path}", flush=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluasi pengujian hipotesis tier 2.")
     parser.add_argument("--split", required=True, choices=SPLITS)
     parser.add_argument("--parquet-dir", type=Path, default=INITIAL_PARQUET_DIR)
     parser.add_argument("--smoke", action="store_true", help="Eksperimen smoke.")
+    parser.add_argument(
+        "--gray-zone",
+        action="store_true",
+        help="Pilih ambang bawah zona abu-abu untuk satu versi tier 1 (hanya split validasi).",
+    )
+    parser.add_argument("--tier1-version", type=int, default=1)
+    parser.add_argument("--tier2-version", type=int, default=1)
     args = parser.parse_args()
 
     check_average_precision()
+    if args.gray_zone:
+        if args.split != "validation":
+            parser.error("--gray-zone hanya boleh memakai --split validation.")
+        run_gray_zone(args)
+        return
     experiment_id = setup_mlflow(args.smoke)
     if args.split == "test" and completed_test_evaluations(experiment_id):
         raise SystemExit(
