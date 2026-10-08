@@ -1,0 +1,50 @@
+{
+  "candidate": "lightgbm",
+  "source_calibration_run_id": "8944b2ec35ed41b596044bbacca3cc38",
+  "selected_cost_ratio": 5,
+  "decision_rule": "tolak jika skor >= reject; setujui dan tandai review jika review <= skor < reject; selain itu setujui biasa",
+  "thresholds": {
+    "reject": 0.16666666666666666,
+    "review": 0.15955434097120033,
+    "lower": null
+  },
+  "lower_threshold_note": "belum ditentukan: memerlukan eksperimen dengan model tier 2 yang belum dibangun",
+  "review_capacity_fraction": 0.01,
+  "scenarios": {
+    "2": {
+      "reject": 0.3333333333333333,
+      "review": 0.23379110779046738,
+      "reject_rate": 0.028406204490805026,
+      "review_actual_rate": 0.007654011582619298,
+      "usable": true
+    },
+    "5": {
+      "reject": 0.16666666666666666,
+      "review": 0.15955434097120033,
+      "reject_rate": 0.04193619399193958,
+      "review_actual_rate": 0.009643715921021439,
+      "usable": true
+    },
+    "10": {
+      "reject": 0.09090909090909091,
+      "review": 0.059262997162349035,
+      "reject_rate": 0.0841009923121211,
+      "review_actual_rate": 0.009728384190740678,
+      "usable": true
+    },
+    "20": {
+      "reject": 0.047619047619047616,
+      "review": 0.047619047619047616,
+      "reject_rate": 0.10288041453584855,
+      "review_actual_rate": 0.0,
+      "usable": false
+    }
+  },
+  "assumptions": [
+    "Rasio biaya lolos-fraud terhadap biaya salah-tolak tidak tersedia dari data, jadi dievaluasi sebagai skenario, bukan diklaim sebagai satu angka benar.",
+    "Kapasitas review adalah laju (fraksi volume transaksi yang sanggup direview), bukan batas keras: review boleh selesai di hari berikutnya, tetapi rata-rata laju antrean masuk tidak boleh melebihi laju review, kalau tidak backlog tumbuh tanpa batas.",
+    "Transaksi di bawah ambang review tidak pernah masuk antrean review, dan itu risiko yang diterima secara sadar.",
+    "Batas waktu penyelesaian review belum didefinisikan, jadi umur antrean tidak dievaluasi di sini dan perlu dipantau terpisah.",
+    "Kalibrator dan ambang dipilih pada split validasi yang sama, jadi precision dan recall di tabel ini bisa meleset beberapa poin persentase dari kenyataan. Angka resmi diukur sekali di data uji tanpa mengubah ambang."
+  ]
+}
