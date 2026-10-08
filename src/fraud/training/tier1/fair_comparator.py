@@ -28,17 +28,15 @@ from lightgbm import LGBMClassifier
 from mlflow import artifacts as mlflow_artifacts
 from sklearn.metrics import average_precision_score, roc_auc_score
 
-from fraud.training.tier1.candidates import RANDOM_SEED, parent_run
+from fraud.training.tier1.candidates import parent_run
 from fraud.training.tier1.dataset import WINDOW_FEATURE_NAMES, Split, prepare_datasets
-from fraud.training.tier2.tracking import setup_mlflow
+from fraud.training.tier2.tracking import HYPOTHESIS_SEEDS, setup_mlflow
 
 CANDIDATE = "lightgbm"
 THRESHOLDS_PATH = Path("configs/tier1_thresholds.json")
 
 # Lengan dan apakah fitur jendela waktu ikut menjadi input.
 ARMS = {"t1": False, "t1_plus": True}
-
-COMPARATOR_SEEDS = tuple(RANDOM_SEED + offset for offset in range(5))
 
 SMOKE_ROW_LIMIT = 30_000
 # Dua seed cukup untuk membuktikan simpangan baku bisa dihitung; pohon dikurangi supaya cepat.
@@ -137,7 +135,7 @@ def run_arm(arm: str, smoke: bool) -> list[float]:
     source_run_id, params = production_source_params()
     data = prepare_datasets(with_window_features=ARMS[arm])
     train, validation, spec = data.train, data.validation, data.spec
-    seeds = COMPARATOR_SEEDS
+    seeds = HYPOTHESIS_SEEDS
     if smoke:
         train, validation = _head(train, SMOKE_ROW_LIMIT), _head(validation, SMOKE_ROW_LIMIT)
         seeds = seeds[:SMOKE_SEED_COUNT]

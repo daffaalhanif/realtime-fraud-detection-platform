@@ -13,6 +13,9 @@ from dotenv import load_dotenv
 EXPERIMENT_NAME = "tier2-hypothesis"
 SMOKE_EXPERIMENT_NAME = "tier2-hypothesis-smoke"
 
+# Seed pengulangan yang sama untuk setiap lengan, supaya variasi alami antar lengan sebanding.
+HYPOTHESIS_SEEDS = (42, 43, 44, 45, 46)
+
 
 def setup_mlflow(smoke: bool) -> str:
     """Menyambungkan ke server MLflow dan memilih eksperimen, mengembalikan id eksperimennya.

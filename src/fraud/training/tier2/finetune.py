@@ -17,6 +17,7 @@ import json
 import math
 import tempfile
 import time
+from dataclasses import dataclass, fields
 from pathlib import Path
 
 import mlflow
@@ -71,7 +72,7 @@ SELECTION_SIZES = {
     "small": Tier2Config(),
     "medium": Tier2Config(d_model=128, n_layers=4, n_heads=8, d_ff=256),
 }
-_SIZE_PARAMS = ("d_model", "n_layers", "n_heads", "d_ff")
+SIZE_PARAMS = ("d_model", "n_layers", "n_heads", "d_ff")
 
 
 def load_run_package(
@@ -327,13 +328,33 @@ def selection_candidates(smoke: bool) -> list[tuple[int, Tier2Config]]:
     return [(seq_len, config) for seq_len in SELECTION_SEQ_LENS for config in sizes]
 
 
-def _candidate_key(seq_len: int | str, config: Tier2Config | dict) -> tuple[str, ...]:
+def candidate_key(seq_len: int | str, config: Tier2Config | dict) -> tuple[str, ...]:
+    """Kunci teks satu konfigurasi: panjang sequence dan ukuran model.
+
+    Args:
+        seq_len: Panjang sequence, angka atau teks dari params MLflow.
+        config: Konfigurasi model, atau params MLflow sebuah run yang mencatatnya.
+    """
     values = config.to_dict() if isinstance(config, Tier2Config) else config
-    return (str(seq_len), *(str(values[name]) for name in _SIZE_PARAMS))
+    return (str(seq_len), *(str(values[name]) for name in SIZE_PARAMS))
 
 
-def select_report_command(args: argparse.Namespace) -> None:
-    experiment_id = setup_mlflow(args.smoke)
+@dataclass(frozen=True)
+class SelectionStatus:
+    """Keadaan pemilihan konfigurasi di MLflow.
+
+    Attributes:
+        ranked: Run fine-tuning terbaru tiap kandidat yang sudah selesai, PR-AUC validasi
+            tertinggi lebih dulu.
+        missing: Kunci kandidat yang belum punya run selesai.
+    """
+
+    ranked: list[Run]
+    missing: list[tuple[str, ...]]
+
+
+def selection_status(experiment_id: str, smoke: bool) -> SelectionStatus:
+    """Membaca run pemilihan konfigurasi di lengan berurutan dari MLflow."""
     runs = mlflow.MlflowClient().search_runs(
         [experiment_id],
         filter_string=(
@@ -345,33 +366,53 @@ def select_report_command(args: argparse.Namespace) -> None:
     # Kandidat yang diulang diwakili run terbarunya.
     latest: dict[tuple[str, ...], Run] = {}
     for run in runs:
-        latest.setdefault(_candidate_key(run.data.params["seq_len"], run.data.params), run)
+        latest.setdefault(candidate_key(run.data.params["seq_len"], run.data.params), run)
 
-    expected = [
-        _candidate_key(seq_len, config) for seq_len, config in selection_candidates(args.smoke)
-    ]
-    missing = [key for key in expected if key not in latest]
+    expected = [candidate_key(seq_len, config) for seq_len, config in selection_candidates(smoke)]
     ranked = sorted(
         (latest[key] for key in expected if key in latest),
         key=lambda run: run.data.metrics["best_validation_pr_auc"],
         reverse=True,
     )
-    header = ("seq_len", *_SIZE_PARAMS)
-    print(f"Kandidat pemilihan selesai: {len(ranked)} dari {len(expected)}")
+    return SelectionStatus(ranked=ranked, missing=[key for key in expected if key not in latest])
+
+
+def selected_configuration(experiment_id: str, smoke: bool) -> tuple[int, Tier2Config] | None:
+    """Panjang sequence dan ukuran model terpilih, atau None kalau kandidat belum lengkap."""
+    status = selection_status(experiment_id, smoke)
+    if status.missing or not status.ranked:
+        return None
+    params = status.ranked[0].data.params
+    defaults = Tier2Config()
+    # Params MLflow tersimpan sebagai teks; dikembalikan ke tipe field bawaan konfigurasi.
+    config = Tier2Config(
+        **{
+            field.name: type(getattr(defaults, field.name))(params[field.name])
+            for field in fields(Tier2Config)
+        }
+    )
+    return int(params["seq_len"]), config
+
+
+def select_report_command(args: argparse.Namespace) -> None:
+    status = selection_status(setup_mlflow(args.smoke), args.smoke)
+    header = ("seq_len", *SIZE_PARAMS)
+    total = len(status.ranked) + len(status.missing)
+    print(f"Kandidat pemilihan selesai: {len(status.ranked)} dari {total}")
     print("  " + " ".join(f"{name:>8s}" for name in header) + f" {'PR-AUC':>8s}  run id")
-    for run in ranked:
-        key = _candidate_key(run.data.params["seq_len"], run.data.params)
+    for run in status.ranked:
+        key = candidate_key(run.data.params["seq_len"], run.data.params)
         print(
             "  " + " ".join(f"{value:>8s}" for value in key)
             + f" {run.data.metrics['best_validation_pr_auc']:>8.4f}  {run.info.run_id}"
         )
-    if missing:
+    if status.missing:
         print("PERHATIAN: kandidat belum lengkap, konfigurasi belum boleh dipilih. Belum ada:")
-        for key in missing:
+        for key in status.missing:
             print("  " + ", ".join(f"{name} {value}" for name, value in zip(header, key)))
         return
-    best_params = ranked[0].data.params
-    best = dict(zip(header, _candidate_key(best_params["seq_len"], best_params)))
+    best_params = status.ranked[0].data.params
+    best = dict(zip(header, candidate_key(best_params["seq_len"], best_params)))
     print("Terpilih: " + ", ".join(f"{name} {value}" for name, value in best.items()))
 
 
