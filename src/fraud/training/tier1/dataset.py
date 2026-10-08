@@ -27,15 +27,13 @@ from fraud.features.encoding import (
 )
 from fraud.features.offline_store import INITIAL_PARQUET_DIR, LABEL_COLUMN, PARTITION_COLUMN
 from fraud.features.online_store import SEQUENCE_RETENTION_LIMIT
-from fraud.features.window import WindowFeatures, window_features
+from fraud.features.window import WINDOW_FEATURE_NAMES, window_features
 from fraud.schemas.transaction import Transaction
 
 # Pengenal, waktu mentah, dan kunci entitas (perilakunya sudah diwakili fitur agregat).
 EXCLUDED_RAW_COLUMNS = ("TransactionID", "TransactionDT", "card1")
 
 AGGREGATE_FEATURE_NAMES = list(AggregateFeatures.__annotations__)
-
-WINDOW_FEATURE_NAMES = list(WindowFeatures.__annotations__)
 
 # Kode nominal yang tersimpan numerik: nilainya pengenal, bukan besaran yang punya urutan.
 NUMERIC_CATEGORICAL_COLUMNS = (

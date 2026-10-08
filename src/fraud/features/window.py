@@ -7,7 +7,7 @@ ini sendiri yang memotong histori ke batas itu, sehingga jalur batch yang memega
 lebih panjang tetap menghasilkan angka yang sama persis dengan jalur serving.
 """
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from itertools import islice
 from typing import TypedDict
 
@@ -41,6 +41,14 @@ class WindowFeatures(TypedDict):
     amt_sum_last_1h: float
     amt_sum_last_24h: float
     amt_sum_last_7d: float
+
+
+WINDOW_FEATURE_NAMES = list(WindowFeatures.__annotations__)
+
+
+def requires_window_features(input_columns: Collection[str]) -> bool:
+    """Apakah kontrak input sebuah model memuat fitur jendela waktu."""
+    return any(name in input_columns for name in WINDOW_FEATURE_NAMES)
 
 
 def window_features(history: Sequence[tuple[int, float]], transaction_dt: int) -> WindowFeatures:

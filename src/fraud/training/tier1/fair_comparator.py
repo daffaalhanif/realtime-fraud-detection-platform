@@ -29,7 +29,8 @@ from mlflow import artifacts as mlflow_artifacts
 from sklearn.metrics import average_precision_score, roc_auc_score
 
 from fraud.training.tier1.candidates import parent_run
-from fraud.training.tier1.dataset import WINDOW_FEATURE_NAMES, Split, prepare_datasets
+from fraud.features.window import WINDOW_FEATURE_NAMES
+from fraud.training.tier1.dataset import Split, prepare_datasets
 from fraud.training.tier2.tracking import HYPOTHESIS_SEEDS, setup_mlflow
 
 CANDIDATE = "lightgbm"
