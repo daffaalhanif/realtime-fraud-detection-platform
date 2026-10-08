@@ -62,6 +62,26 @@ def finished_main_runs(experiment_id: str) -> list[Run]:
     )
 
 
+def latest_main_runs(
+    experiment_id: str, seq_len: int, config: Tier2Config
+) -> dict[tuple[str, int], Run]:
+    """Run fine-tuning pengulangan utama terbaru per (mode, seed) dengan konfigurasi terpilih.
+
+    Run dari konfigurasi lain tidak ikut, sehingga pemilihan yang diulang tidak mencampur
+    pengulangan dari dua konfigurasi berbeda.
+    """
+    latest: dict[tuple[str, int], Run] = {}
+    for run in sorted(
+        finished_main_runs(experiment_id), key=lambda run: run.info.start_time, reverse=True
+    ):
+        params = run.data.params
+        if candidate_key(params["seq_len"], params) == candidate_key(
+            arm_seq_len(params["mode"], seq_len), config
+        ):
+            latest.setdefault((params["mode"], int(params["seed"])), run)
+    return latest
+
+
 def plan_runs(
     experiment_id: str,
     modes: list[str],
@@ -71,18 +91,10 @@ def plan_runs(
 ) -> tuple[list[tuple[str, int]], list[tuple[str, int]]]:
     """Membagi pasangan (mode, seed) menjadi yang sudah selesai dan yang masih harus dijalankan.
 
-    Sebuah pengulangan dianggap selesai hanya kalau run fine-tuningnya memakai konfigurasi yang
-    sama persis, sehingga run dari konfigurasi lain tidak ikut terhitung.
-
     Returns:
         Pasangan yang sudah selesai dan pasangan yang tersisa, urut seed lalu lengan.
     """
-    done_keys = {
-        (run.data.params["mode"], int(run.data.params["seed"]))
-        for run in finished_main_runs(experiment_id)
-        if candidate_key(run.data.params["seq_len"], run.data.params)
-        == candidate_key(arm_seq_len(run.data.params["mode"], seq_len), config)
-    }
+    done_keys = latest_main_runs(experiment_id, seq_len, config)
     ordered_pairs = [(mode, seed) for seed in seeds for mode in modes]
     done = [pair for pair in ordered_pairs if pair in done_keys]
     remaining = [pair for pair in ordered_pairs if pair not in done_keys]
@@ -92,13 +104,8 @@ def plan_runs(
 def print_summary(experiment_id: str, seq_len: int, config: Tier2Config) -> None:
     """PR-AUC validasi per lengan; hanya informasi, putusan resmi dihitung di evaluasi."""
     by_mode: dict[str, list[float]] = {}
-    for run in finished_main_runs(experiment_id):
-        params = run.data.params
-        if candidate_key(params["seq_len"], params) != candidate_key(
-            arm_seq_len(params["mode"], seq_len), config
-        ):
-            continue
-        by_mode.setdefault(params["mode"], []).append(run.data.metrics["best_validation_pr_auc"])
+    for (mode, _), run in latest_main_runs(experiment_id, seq_len, config).items():
+        by_mode.setdefault(mode, []).append(run.data.metrics["best_validation_pr_auc"])
     print("\nPR-AUC validasi per lengan (informasi, bukan putusan pengujian):")
     for mode in SEQUENCE_MODES:
         scores = by_mode.get(mode, [])
