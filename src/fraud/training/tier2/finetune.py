@@ -9,6 +9,7 @@ selalu terdiri dari pretraining dan fine-tuning dengan seed yang sama.
 Dijalankan lewat:
     uv run python -m fraud.training.tier2.finetune run --pretrain-run-id ID [--smoke]
     uv run python -m fraud.training.tier2.finetune pipeline --arm ordered --seq-len 32 [...]
+    uv run python -m fraud.training.tier2.finetune select [--dry-run] [--smoke]
     uv run python -m fraud.training.tier2.finetune select-report [--smoke]
 """
 
@@ -42,7 +43,10 @@ from fraud.training.tier2.pretrain import (
     CHECKPOINT_ARTIFACT as PRETRAIN_CHECKPOINT_ARTIFACT,
     CONFIG_ARTIFACT,
     GRAD_CLIP_NORM,
+    MAX_EPOCHS as PRETRAIN_MAX_EPOCHS,
     SMOKE_CONFIG,
+    SMOKE_MAX_EPOCHS,
+    SMOKE_ROW_LIMIT,
     SPEC_ARTIFACT,
     VALIDATION_SEED,
     WEIGHT_DECAY,
@@ -51,7 +55,7 @@ from fraud.training.tier2.pretrain import (
     run_settings,
     warmup_cosine,
 )
-from fraud.training.tier2.tracking import select_device, setup_mlflow
+from fraud.training.tier2.tracking import HYPOTHESIS_SEEDS, select_device, setup_mlflow
 
 STAGE = "finetune"
 
@@ -67,6 +71,7 @@ CHECKPOINT_ARTIFACT = "finetune_checkpoint.pt"
 # Konfigurasi terpilih dipakai ketiga lengan supaya perbandingannya tidak tercampur ukuran model.
 SELECTION_PURPOSE = "selection"
 SELECTION_MODE = "ordered"
+SELECTION_SEED = HYPOTHESIS_SEEDS[0]
 SELECTION_SEQ_LENS = (16, 32, 64)
 SELECTION_SIZES = {
     "small": Tier2Config(),
@@ -416,6 +421,46 @@ def select_report_command(args: argparse.Namespace) -> None:
     print("Terpilih: " + ", ".join(f"{name} {value}" for name, value in best.items()))
 
 
+def select_command(args: argparse.Namespace) -> None:
+    """Menjalankan kandidat pemilihan yang belum selesai; yang sudah selesai dilewati."""
+    experiment_id = setup_mlflow(args.smoke)
+    missing = set(selection_status(experiment_id, args.smoke).missing)
+    remaining = [
+        (seq_len, config)
+        for seq_len, config in selection_candidates(args.smoke)
+        if candidate_key(seq_len, config) in missing
+    ]
+    print(f"Kandidat pemilihan tersisa: {len(remaining)}")
+    for seq_len, config in remaining:
+        print(f"  akan dijalankan: seq_len {seq_len}, {config.to_dict()}")
+    if args.dry_run or not remaining:
+        select_report_command(args)
+        return
+
+    if args.smoke:
+        pretrain_epochs = finetune_epochs = SMOKE_MAX_EPOCHS
+        row_limit = SMOKE_ROW_LIMIT
+    else:
+        pretrain_epochs, finetune_epochs, row_limit = PRETRAIN_MAX_EPOCHS, MAX_EPOCHS, None
+    device = select_device()
+    print(f"Menyiapkan data dari {args.parquet_dir} untuk device {device} ...", flush=True)
+    data = prepare_sequence_data(args.parquet_dir, row_limit).to(device)
+    for index, (seq_len, config) in enumerate(remaining, start=1):
+        print(f"\n[{index}/{len(remaining)}] seq_len {seq_len}, {config.to_dict()}", flush=True)
+        pretrain_run_id = pretrain_and_log(
+            data,
+            SELECTION_MODE,
+            SELECTION_SEED,
+            seq_len,
+            config,
+            pretrain_epochs,
+            SELECTION_PURPOSE,
+            row_limit,
+        )
+        finetune_and_log(pretrain_run_id, data, finetune_epochs)
+    select_report_command(args)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fine-tuning dan pemilihan model tier 2.")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -429,6 +474,14 @@ def main() -> None:
     pipeline_parser = commands.add_parser("pipeline", help="Pretraining lalu fine-tuning.")
     add_run_arguments(pipeline_parser)
     pipeline_parser.set_defaults(handler=pipeline_command)
+
+    select_parser = commands.add_parser(
+        "select", help="Jalankan kandidat pemilihan yang belum selesai."
+    )
+    select_parser.add_argument("--parquet-dir", type=Path, default=INITIAL_PARQUET_DIR)
+    select_parser.add_argument("--dry-run", action="store_true", help="Cetak rencana saja.")
+    select_parser.add_argument("--smoke", action="store_true", help="Eksperimen smoke.")
+    select_parser.set_defaults(handler=select_command)
 
     report_parser = commands.add_parser("select-report", help="Ringkasan pemilihan konfigurasi.")
     report_parser.add_argument("--smoke", action="store_true", help="Eksperimen smoke.")
