@@ -21,6 +21,7 @@ import argparse
 import math
 from dataclasses import dataclass
 from functools import partial
+from typing import Any
 
 import mlflow
 import mlflow.sklearn as mlflow_sklearn
@@ -39,6 +40,7 @@ from fraud.training.tier1.candidates import (
     parent_run,
     setup_mlflow,
 )
+from fraud.training.tier1.dataset import Split
 from fraud.training.tier1.search_results import (
     Confirmation,
     best_parent,
@@ -354,6 +356,62 @@ def reliability_table(
     return pd.DataFrame(rows)
 
 
+@dataclass(frozen=True)
+class CalibrationResult:
+    """Model terkalibrasi beserta ukuran mutu kalibrasinya di split validasi.
+
+    Attributes:
+        model: Model asli yang dibungkus kalibrator isotonic.
+        brier_before: Brier score skor mentah.
+        brier_after: Brier score skor terkalibrasi.
+        reliability: Tabel rata-rata prediksi vs fraud rate aktual per kelompok skor.
+    """
+
+    model: CalibratedClassifierCV
+    brier_before: float
+    brier_after: float
+    reliability: pd.DataFrame
+
+
+def fit_isotonic(model: Any, validation: Split) -> CalibrationResult:
+    """Mengalibrasi model yang sudah dilatih dengan isotonic regression di split validasi.
+
+    Model asli dibekukan sehingga tidak dilatih ulang; hanya kalibratornya yang di-fit.
+
+    Args:
+        model: Model terlatih dengan `predict_proba`.
+        validation: Split validasi, tempat kalibrator di-fit dan mutunya diukur.
+    """
+    raw_scores = model.predict_proba(validation.features)[:, 1]
+    calibrated = CalibratedClassifierCV(FrozenEstimator(model), method=CALIBRATION_METHOD)
+    calibrated.fit(validation.features, validation.label)
+    calibrated_scores = calibrated.predict_proba(validation.features)[:, 1]
+    return CalibrationResult(
+        model=calibrated,
+        brier_before=float(brier_score_loss(validation.label, raw_scores)),
+        brier_after=float(brier_score_loss(validation.label, calibrated_scores)),
+        reliability=reliability_table(validation.label, calibrated_scores),
+    )
+
+
+def print_calibration(result: CalibrationResult) -> None:
+    """Mencetak Brier score sebelum dan sesudah kalibrasi beserta tabel reliability."""
+    print(
+        f"Brier score: sebelum {result.brier_before:.5f}, sesudah {result.brier_after:.5f}",
+        flush=True,
+    )
+    print(result.reliability.to_string(index=False), flush=True)
+
+
+def log_calibration(result: CalibrationResult) -> None:
+    """Mencatat mutu kalibrasi dan model terkalibrasi di run MLflow yang sedang aktif."""
+    mlflow.log_metrics({"brier_before": result.brier_before, "brier_after": result.brier_after})
+    mlflow.log_dict(
+        {"rows": result.reliability.to_dict(orient="records")}, "reliability_table.json"
+    )
+    _log_calibrated_model(result.model, name="model")
+
+
 def run_calibration(experiment_id: str, smoke: bool) -> CalibratedClassifierCV:
     """Mengalibrasi kandidat terbaik dan mencatatnya sebagai run baru di MLflow.
 
@@ -371,18 +429,8 @@ def run_calibration(experiment_id: str, smoke: bool) -> CalibratedClassifierCV:
 
     model = load_model(contender.run, contender.name)
     train, validation, spec = load_training_data(smoke)
-
-    raw_scores = model.predict_proba(validation.features)[:, 1]
-    brier_before = float(brier_score_loss(validation.label, raw_scores))
-
-    calibrated = CalibratedClassifierCV(FrozenEstimator(model), method=CALIBRATION_METHOD)
-    calibrated.fit(validation.features, validation.label)
-    calibrated_scores = calibrated.predict_proba(validation.features)[:, 1]
-    brier_after = float(brier_score_loss(validation.label, calibrated_scores))
-    print(f"Brier score: sebelum {brier_before:.5f}, sesudah {brier_after:.5f}", flush=True)
-
-    reliability = reliability_table(validation.label, calibrated_scores)
-    print(reliability.to_string(index=False), flush=True)
+    result = fit_isotonic(model, validation)
+    print_calibration(result)
 
     with parent_run(contender.name, STAGE_CALIBRATION, train, validation, spec):
         mlflow.log_params(
@@ -394,14 +442,10 @@ def run_calibration(experiment_id: str, smoke: bool) -> CalibratedClassifierCV:
                 "selection_basis": "confirm_mean" if contender.confirmation else "search_score",
             }
         )
-        brier = {"brier_before": brier_before, "brier_after": brier_after}
-        mlflow.log_metrics(selection_metrics(best) | brier)
+        mlflow.log_metrics(selection_metrics(best))
         mlflow.set_tag("winner_within_noise", winner_within_noise_tag(best))
-        mlflow.log_dict(
-            {"rows": reliability.to_dict(orient="records")}, "reliability_table.json"
-        )
-        _log_calibrated_model(calibrated, name="model")
-    return calibrated
+        log_calibration(result)
+    return result.model
 
 
 def main() -> None:

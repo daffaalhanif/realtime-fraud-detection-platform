@@ -290,6 +290,58 @@ def build_config(
     }
 
 
+def compute_thresholds(
+    score: np.ndarray, label: np.ndarray, cost_ratio: int, capacity_fraction: float
+) -> tuple[list[ScenarioResult], ScenarioResult]:
+    """Menghitung ambang semua skenario biaya dan memilih skenario titik operasi.
+
+    Args:
+        score: Skor terkalibrasi di split validasi.
+        label: Label fraud sejajar dengan `score`.
+        cost_ratio: Skenario yang dipakai sebagai titik operasi, salah satu `COST_RATIOS`.
+        capacity_fraction: Kapasitas review sebagai fraksi dari seluruh transaksi.
+
+    Returns:
+        Hasil semua skenario dan skenario terpilih.
+    """
+    results = [
+        evaluate_scenario(score, label, ratio, capacity_fraction) for ratio in COST_RATIOS
+    ]
+    return results, next(r for r in results if r.cost_ratio == cost_ratio)
+
+
+def ensure_meaningful(selected: ScenarioResult) -> None:
+    """Menolak skenario yang membuat tiga kelas keputusan tidak bermakna.
+
+    Raises:
+        ValueError: Kalau zona review kosong atau menghabiskan seluruh transaksi di bawah
+            ambang tolak.
+    """
+    if selected.review_zone_empty or selected.review_covers_all_below_reject:
+        raise ValueError(
+            f"Skenario {selected.cost_ratio}:1 menghasilkan zona review yang tidak bermakna "
+            f"(kosong={selected.review_zone_empty}, "
+            f"menghabiskan semua={selected.review_covers_all_below_reject})."
+        )
+
+
+def threshold_metrics(selected: ScenarioResult, distinct_scores: int) -> dict[str, float]:
+    """Metrik skenario terpilih untuk dicatat di MLflow."""
+    metrics = {
+        "reject_rate": selected.reject_rate,
+        "reject_recall": selected.reject_recall,
+        "review_actual_rate": selected.review_actual_rate,
+        "review_recall": selected.review_recall,
+        "unreviewed_fraud_share": selected.unreviewed_fraud_share,
+        "distinct_scores": float(distinct_scores),
+    }
+    if selected.reject_precision is not None:
+        metrics["reject_precision"] = selected.reject_precision
+    if selected.review_precision is not None:
+        metrics["review_precision"] = selected.review_precision
+    return metrics
+
+
 def run_threshold(
     experiment_id: str,
     smoke: bool,
@@ -323,19 +375,10 @@ def run_threshold(
     score = model.predict_proba(validation.features)[:, 1]
     label = validation.label.to_numpy()
 
-    results = [
-        evaluate_scenario(score, label, ratio, capacity_fraction) for ratio in COST_RATIOS
-    ]
     distinct_scores = len(np.unique(score))
+    results, selected = compute_thresholds(score, label, cost_ratio, capacity_fraction)
     print_sensitivity_table(results, distinct_scores)
-
-    selected = next(r for r in results if r.cost_ratio == cost_ratio)
-    if selected.review_zone_empty or selected.review_covers_all_below_reject:
-        raise ValueError(
-            f"Skenario {cost_ratio}:1 menghasilkan zona review yang tidak bermakna "
-            f"(kosong={selected.review_zone_empty}, "
-            f"menghabiskan semua={selected.review_covers_all_below_reject})."
-        )
+    ensure_meaningful(selected)
 
     config = build_config(
         results, selected, capacity_fraction, candidate, calibration_run.info.run_id
@@ -344,18 +387,7 @@ def run_threshold(
     output_path.write_text(json.dumps(config, indent=2, ensure_ascii=False) + "\n")
     print(f"Konfigurasi ditulis ke {output_path} (skenario {cost_ratio}:1)", flush=True)
 
-    metrics = {
-        "reject_rate": selected.reject_rate,
-        "reject_recall": selected.reject_recall,
-        "review_actual_rate": selected.review_actual_rate,
-        "review_recall": selected.review_recall,
-        "unreviewed_fraud_share": selected.unreviewed_fraud_share,
-        "distinct_scores": float(distinct_scores),
-    }
-    if selected.reject_precision is not None:
-        metrics["reject_precision"] = selected.reject_precision
-    if selected.review_precision is not None:
-        metrics["review_precision"] = selected.review_precision
+    metrics = threshold_metrics(selected, distinct_scores)
 
     with parent_run(candidate, STAGE_THRESHOLD, train, validation, spec):
         mlflow.log_params(

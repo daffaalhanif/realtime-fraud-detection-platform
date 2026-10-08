@@ -366,6 +366,38 @@ def _signature(n_features: int) -> ModelSignature:
     )
 
 
+def build_calibrated_onnx(
+    calibrated: CalibratedClassifierCV, n_features: int
+) -> tuple[onnx.ModelProto, LGBMClassifier]:
+    """Graf ONNX mandiri dari model terkalibrasi: pohon LightGBM lalu interpolasi isotonic.
+
+    Returns:
+        Graf ONNX dan estimator LightGBM di dalamnya, yang dipakai pemeriksaan konsistensi.
+    """
+    estimator, isotonic = calibrated_parts(calibrated)
+    return add_isotonic_calibration(lightgbm_to_onnx(estimator, n_features), isotonic), estimator
+
+
+def export_metrics(
+    report: ConsistencyReport,
+    latency: dict[str, float],
+    model_bytes: bytes,
+    conversion_seconds: float,
+) -> dict[str, float]:
+    """Metrik ekspor untuk dicatat di MLflow: ukuran, waktu konversi, konsistensi, latensi."""
+    return {
+        "onnx_size_mb": len(model_bytes) / 1e6,
+        "conversion_seconds": conversion_seconds,
+        "raw_max_abs_diff": report.raw_max_abs_diff,
+        "raw_mean_abs_diff": report.raw_mean_abs_diff,
+        "score_max_abs_diff": report.score_max_abs_diff,
+        "score_mean_abs_diff": report.score_mean_abs_diff,
+        "rows_over_1e_4": float(report.rows_over_1e_4),
+        "max_class_mismatches": float(max(report.class_mismatches.values())),
+        **latency,
+    }
+
+
 def run_export(experiment_id: str, smoke: bool, thresholds_path: Path) -> ConsistencyReport:
     """Mengekspor model terkalibrasi terbaru ke ONNX, memverifikasi, dan mendaftarkannya.
 
@@ -388,12 +420,11 @@ def run_export(experiment_id: str, smoke: bool, thresholds_path: Path) -> Consis
     print(f"Kalibrasi sumber: {candidate} (run {calibration_run.info.run_id[:8]})", flush=True)
 
     calibrated = load_calibrated_model(calibration_run)
-    estimator, isotonic = calibrated_parts(calibrated)
     train, validation, spec = load_training_data(smoke)
     n_features = len(spec["input_columns"])
 
     start = time.perf_counter()
-    model = add_isotonic_calibration(lightgbm_to_onnx(estimator, n_features), isotonic)
+    model, estimator = build_calibrated_onnx(calibrated, n_features)
     model_bytes = model.SerializeToString()
     conversion_seconds = time.perf_counter() - start
     print(f"Konversi: {conversion_seconds:.0f} detik, {len(model_bytes) / 1e6:.1f} MB", flush=True)
@@ -412,7 +443,7 @@ def run_export(experiment_id: str, smoke: bool, thresholds_path: Path) -> Consis
 
     registered_name = SMOKE_REGISTERED_MODEL_NAME if smoke else REGISTERED_MODEL_NAME
     with parent_run(candidate, STAGE_EXPORT, train, validation, spec):
-        _log_and_register(
+        log_and_register(
             model, spec, thresholds, thresholds_path, calibration_run.info.run_id,
             candidate, registered_name, n_features,
         )
@@ -424,24 +455,12 @@ def run_export(experiment_id: str, smoke: bool, thresholds_path: Path) -> Consis
                 "registered_model_name": registered_name,
             }
         )
-        mlflow.log_metrics(
-            {
-                "onnx_size_mb": len(model_bytes) / 1e6,
-                "conversion_seconds": conversion_seconds,
-                "raw_max_abs_diff": report.raw_max_abs_diff,
-                "raw_mean_abs_diff": report.raw_mean_abs_diff,
-                "score_max_abs_diff": report.score_max_abs_diff,
-                "score_mean_abs_diff": report.score_mean_abs_diff,
-                "rows_over_1e_4": float(report.rows_over_1e_4),
-                "max_class_mismatches": float(max(report.class_mismatches.values())),
-                **latency,
-            }
-        )
+        mlflow.log_metrics(export_metrics(report, latency, model_bytes, conversion_seconds))
         mlflow.log_dict(asdict(report), "consistency_report.json")
     return report
 
 
-def _log_and_register(
+def log_and_register(
     model: onnx.ModelProto,
     spec: FeatureSpec,
     thresholds: dict,
