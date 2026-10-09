@@ -5,8 +5,9 @@ dulu, baru online store diperbarui. Kalau online store diperbarui lebih dulu lal
 gagal tanpa jejak, fitur agregat entitas sudah berubah oleh transaksi yang tidak pernah
 tercatat di jalur audit.
 
-Pemanggilan tier 2 untuk zona abu-abu belum ada di alur ini, sehingga ambang bawah tier 1
-belum dipakai.
+Transaksi yang skor tier 1-nya jatuh di zona abu-abu (antara ambang bawah dan ambang tolak)
+juga dinilai tier 2 dalam mode shadow: skornya dicatat bersama keputusan, tetapi keputusan
+tetap dari tier 1.
 """
 
 import logging
@@ -31,13 +32,14 @@ from fraud.features.online_store import (
     state_from_hash,
     state_to_hash,
 )
+from fraud.features.sequence import assemble_sequence
 from fraud.features.window import requires_window_features, window_features
 from fraud.schemas.score_response import DecisionClass, ScoreResponse
 from fraud.schemas.scored_message import ScoredMessage
 from fraud.schemas.transaction import Transaction
 from fraud.serving.idempotency import get_decided, record_decision
 from fraud.serving.kafka_producer import ScoredProducer
-from fraud.serving.model_loader import Tier1Model, Tier1Thresholds
+from fraud.serving.model_loader import ShadowTier2, Tier1Model, Tier1Thresholds
 
 # Tiap putaran WATCH meloloskan minimal satu penulis, jadi penulis yang terus kalah tertunda
 # paling banyak sejumlah penulis serentak pada kunci entitas yang sama. Batas ini hanya
@@ -102,6 +104,7 @@ def decide(
     redis_client: redis.Redis,
     producer: ScoredProducer,
     trace: RequestTrace | None = None,
+    shadow: ShadowTier2 | None = None,
 ) -> ScoreResponse:
     """Memutuskan satu transaksi dan mencatat hasilnya.
 
@@ -114,6 +117,7 @@ def decide(
         redis_client: Koneksi online store, dengan `decode_responses=False`.
         producer: Producer topik `scored`.
         trace: Penampung catatan waktu per langkah. Dibuat sendiri kalau tidak diberikan.
+        shadow: Tier 2 mode shadow; None berarti tier 2 tidak dipanggil.
 
     Returns:
         Keputusan untuk transaksi ini.
@@ -130,6 +134,10 @@ def decide(
     with trace.step("tier1_score"):
         score = model.score(model_input)
         decision = classify(score, model.thresholds)
+    tier2_score = None
+    if shadow is not None and shadow.lower <= score < model.thresholds.reject:
+        with trace.step("tier2_shadow"):
+            tier2_score = _shadow_logit(transaction, shadow, redis_client, trace)
     response = ScoreResponse(
         transaction_id=transaction.TransactionID, decision=decision, score=score
     )
@@ -140,7 +148,11 @@ def decide(
                 transaction=transaction,
                 decision=decision,
                 tier1_score=score,
+                tier2_score=tier2_score,
                 model_version=model.model_version,
+                tier2_model_version=(
+                    shadow.model.model_version if tier2_score is not None and shadow else None
+                ),
                 scored_at=datetime.now(UTC),
             )
         )
@@ -156,6 +168,37 @@ def decide(
         trace.mark("already_decided", True)
         return earlier
     return response
+
+
+def _shadow_logit(
+    transaction: Transaction, shadow: ShadowTier2, redis_client: redis.Redis, trace: RequestTrace
+) -> float | None:
+    """Logit tier 2 untuk transaksi zona abu-abu, atau None kalau penilaian shadow gagal.
+
+    Histori dibaca sebelum transaksi ini dilipat ke online store, sama dengan sequence saat
+    pelatihan yang hanya memuat transaksi sebelumnya.
+    """
+    tier2 = shadow.model
+    try:
+        raw_history = (
+            redis_client.lrange(sequence_key(transaction.card1), -(tier2.seq_len - 1), -1)
+            if tier2.seq_len > 1
+            else []
+        )
+        sequence = assemble_sequence(
+            parse_sequence_entries(cast(list[Any], raw_history)),
+            transaction.model_dump(),
+            tier2.sequence_spec,
+            tier2.seq_len,
+        )
+        logit = tier2.logit(sequence)
+    # Shadow tidak boleh menggagalkan keputusan yang sudah diambil tier 1, apa pun galatnya.
+    except Exception:  # noqa: BLE001
+        logger.exception("Tier 2 shadow gagal untuk TransactionID %s", transaction.TransactionID)
+        trace.mark("tier2_failed", True)
+        return None
+    trace.mark("tier2_called", True)
+    return logit
 
 
 def _read_entity(

@@ -22,7 +22,7 @@ from fraud.schemas.transaction import Transaction
 from fraud.serving.api_key_auth import load_scoring_api_key, verify_api_key
 from fraud.serving.decision import RequestTrace, decide
 from fraud.serving.kafka_producer import ScoredProducer
-from fraud.serving.model_loader import Tier1Model, load_production_tier1
+from fraud.serving.model_loader import Tier1Model, load_production_tier1, load_shadow
 from fraud.serving.retry_buffer import RetryBuffer
 
 # Endpoint sinkron dijalankan di threadpool. Ukurannya ditetapkan eksplisit karena ukuran pool
@@ -66,6 +66,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     anyio.to_thread.current_default_thread_limiter().total_tokens = REQUEST_THREADS
 
     model = load_production_tier1()
+    shadow = load_shadow(model.model_version)
     redis_pool = redis.BlockingConnectionPool(
         host=os.environ["REDIS_HOST"],
         port=int(os.environ["REDIS_PORT"]),
@@ -77,6 +78,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     retry_buffer.start(producer.deliver)
 
     app.state.model = model
+    app.state.shadow = shadow
     app.state.redis_client = redis.Redis(connection_pool=redis_pool)
     app.state.producer = producer
     try:
@@ -104,7 +106,12 @@ def score(transaction: Transaction, request: Request) -> ScoreResponse:
     # Referensi model dibaca sekali, supaya satu request memakai satu versi model sampai selesai.
     model: Tier1Model = request.app.state.model
     response = decide(
-        transaction, model, request.app.state.redis_client, request.app.state.producer, trace
+        transaction,
+        model,
+        request.app.state.redis_client,
+        request.app.state.producer,
+        trace,
+        request.app.state.shadow,
     )
     request_logger.info(
         json.dumps(

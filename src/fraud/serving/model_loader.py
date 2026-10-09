@@ -7,6 +7,7 @@ memilih versi model sendiri.
 """
 
 import json
+import logging
 import os
 import tempfile
 from dataclasses import dataclass
@@ -32,6 +33,8 @@ GRAY_ZONE_CONFIG_PATH = Path("configs/gray_zone.json")
 _SERVABLE_TIER2_MODES = ("ordered", "current_only")
 _TIER2_INPUT_NAMES = ("numeric", "missing", "categorical", "elapsed", "padding_mask")
 _TIER2_OUTPUT_NAME = "logit"
+
+logger = logging.getLogger(__name__)
 
 _INPUT_NAME = "input"
 _SCORE_OUTPUT_NAME = "calibrated_probability"
@@ -276,3 +279,39 @@ def load_gray_zone_lower(
         return None
     entry = json.loads(path.read_text()).get(tier1_model_version)
     return None if entry is None else float(entry["lower"])
+
+
+@dataclass(frozen=True)
+class ShadowTier2:
+    """Tier 2 mode shadow beserta batas bawah zona abu-abu untuk versi tier 1 yang aktif.
+
+    Attributes:
+        model: Model tier 2 yang dipanggil.
+        lower: Skor tier 1 sama dengan atau di atas ini (dan di bawah ambang tolak) memanggil
+            tier 2.
+    """
+
+    model: Tier2Model
+    lower: float
+
+
+def load_shadow(tier1_model_version: str) -> ShadowTier2 | None:
+    """Menyiapkan tier 2 mode shadow untuk satu versi tier 1, kalau keduanya tersedia.
+
+    Returns:
+        Tier 2 beserta ambang bawahnya, atau None kalau tidak ada versi tier 2 beralias shadow
+        atau ambang bawah untuk versi tier 1 ini belum dianalisis.
+    """
+    model = load_shadow_tier2()
+    if model is None:
+        return None
+    lower = load_gray_zone_lower(tier1_model_version)
+    if lower is None:
+        logger.warning(
+            "%s beralias shadow, tetapi ambang bawah zona abu-abu untuk %s belum ada; "
+            "tier 2 tidak dipanggil",
+            model.model_version,
+            tier1_model_version,
+        )
+        return None
+    return ShadowTier2(model=model, lower=lower)
