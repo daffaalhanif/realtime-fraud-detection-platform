@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS audit.decisions (
     transaction_id BIGINT PRIMARY KEY,
     decision TEXT NOT NULL CHECK (decision IN ('decline', 'approve_review', 'approve')),
     tier1_score DOUBLE PRECISION NOT NULL,
+    -- Logit tier 2 mode shadow, belum dikalibrasi; kosong di luar zona abu-abu.
     tier2_score DOUBLE PRECISION,
     model_version TEXT NOT NULL,
     scored_at TIMESTAMPTZ NOT NULL,
@@ -57,6 +58,11 @@ CREATE TABLE IF NOT EXISTS review.queue (
 -- Hanya item terbuka, supaya query backlog tetap murah meski item selesai terus menumpuk.
 CREATE INDEX IF NOT EXISTS queue_open_idx ON review.queue (enqueued_at)
     WHERE reviewed_at IS NULL;
+
+-- Ditambahkan setelah tabel pertama kali dibuat, jadi lewat ALTER supaya database yang sudah
+-- berjalan ikut mendapatkannya tanpa kehilangan data.
+ALTER TABLE audit.decisions ADD COLUMN IF NOT EXISTS tier2_model_version TEXT;
+ALTER TABLE review.queue ADD COLUMN IF NOT EXISTS tier2_model_version TEXT;
 """
 
 

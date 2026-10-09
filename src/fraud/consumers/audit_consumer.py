@@ -32,26 +32,33 @@ BATCH_POLICY = BatchPolicy(max_messages=500, max_wait_seconds=1.0)
 
 _INSERT = """
 INSERT INTO audit.decisions (
-    transaction_id, decision, tier1_score, tier2_score, model_version, scored_at, transaction
+    transaction_id, decision, tier1_score, tier2_score, model_version, tier2_model_version,
+    scored_at, transaction
 )
-VALUES (%s, %s, %s, %s, %s, %s, %s)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
 ON CONFLICT (transaction_id) DO NOTHING
 RETURNING transaction_id
 """
 
 _SELECT_STORED = """
-SELECT transaction_id, decision, tier1_score, tier2_score, model_version
+SELECT transaction_id, decision, tier1_score, tier2_score, model_version, tier2_model_version
 FROM audit.decisions
 WHERE transaction_id = ANY(%s)
 """
 
 logger = logging.getLogger(__name__)
 
-_DecisionFields = tuple[str, float, float | None, str]
+_DecisionFields = tuple[str, float, float | None, str, str | None]
 
 
 def _decision_fields(message: ScoredMessage) -> _DecisionFields:
-    return (message.decision.value, message.tier1_score, message.tier2_score, message.model_version)
+    return (
+        message.decision.value,
+        message.tier1_score,
+        message.tier2_score,
+        message.model_version,
+        message.tier2_model_version,
+    )
 
 
 class AuditWriter:
@@ -91,6 +98,7 @@ class AuditWriter:
             message.tier1_score,
             message.tier2_score,
             message.model_version,
+            message.tier2_model_version,
             message.scored_at,
             transaction_document(message.transaction),
         )
