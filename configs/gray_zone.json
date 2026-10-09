@@ -1,0 +1,71 @@
+{
+  "fraud-tier1/1": {
+    "lower": 0.028884027153253555,
+    "selected_band": "10%",
+    "rule": "Ambang bawah sama dengan ambang review kalau tier 2 tidak unggul di pita mana pun (selang bootstrap 95% selisih PR-AUC di dalam pita tidak seluruhnya di atas nol); kalau ada yang unggul, dipilih pita terlebar yang unggul. Dihitung di split validasi.",
+    "tier2_model": "fraud-tier2/1",
+    "evaluation_run_id": "6d0d0e6300b04a8ea94ecf8a1c2422dd",
+    "bands": [
+      {
+        "label": "review",
+        "lower": 0.13764746703678,
+        "fraction": 0.007814881295085854,
+        "n_rows": 923,
+        "n_fraud": 134,
+        "pr_auc_tier1": 0.14946703358010008,
+        "pr_auc_tier2": 0.2060288606131067,
+        "margin": 0.056561827033006634,
+        "ci_low": 0.014362947993885936,
+        "ci_high": 0.1387879177333005
+      },
+      {
+        "label": "1%",
+        "lower": 0.13636364042758942,
+        "fraction": 0.010227926982084194,
+        "n_rows": 1208,
+        "n_fraud": 172,
+        "pr_auc_tier1": 0.14790220073385743,
+        "pr_auc_tier2": 0.2046618501473399,
+        "margin": 0.056759649413482466,
+        "ci_low": 0.01559739461534376,
+        "ci_high": 0.12850389360088024
+      },
+      {
+        "label": "2%",
+        "lower": 0.10456730425357819,
+        "fraction": 0.026585836691841367,
+        "n_rows": 3140,
+        "n_fraud": 391,
+        "pr_auc_tier1": 0.13887859087441962,
+        "pr_auc_tier2": 0.19739362386873766,
+        "margin": 0.05851503299431804,
+        "ci_low": 0.025442933402492148,
+        "ci_high": 0.10047843096100173
+      },
+      {
+        "label": "5%",
+        "lower": 0.06226271763443947,
+        "fraction": 0.06072408304263894,
+        "n_rows": 7172,
+        "n_fraud": 698,
+        "pr_auc_tier1": 0.12437968673130541,
+        "pr_auc_tier2": 0.16488674699543493,
+        "margin": 0.04050706026412952,
+        "ci_low": 0.01879167601643191,
+        "ci_high": 0.0668176206227231
+      },
+      {
+        "label": "10%",
+        "lower": 0.028884027153253555,
+        "fraction": 0.1342669421207708,
+        "n_rows": 15858,
+        "n_fraud": 997,
+        "pr_auc_tier1": 0.10945690588923583,
+        "pr_auc_tier2": 0.13027248811561906,
+        "margin": 0.02081558222638323,
+        "ci_low": 0.0052109395439001015,
+        "ci_high": 0.03932958763724021
+      }
+    ]
+  }
+}
