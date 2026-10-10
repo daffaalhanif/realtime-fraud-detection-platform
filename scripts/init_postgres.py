@@ -63,6 +63,14 @@ CREATE INDEX IF NOT EXISTS queue_open_idx ON review.queue (enqueued_at)
 -- berjalan ikut mendapatkannya tanpa kehilangan data.
 ALTER TABLE audit.decisions ADD COLUMN IF NOT EXISTS tier2_model_version TEXT;
 ALTER TABLE review.queue ADD COLUMN IF NOT EXISTS tier2_model_version TEXT;
+
+-- Penjelasan item review: kontribusi SHAP, narasi templat yang disusun dari kontribusi itu, dan
+-- narasi LLM yang sengaja terpisah supaya kegagalan LLM tidak mengosongkan penjelasan. Semuanya
+-- boleh kosong di level tabel karena baris yang sudah ada sebelum kolom ini tidak punya isinya.
+ALTER TABLE review.queue ADD COLUMN IF NOT EXISTS explanation JSONB;
+ALTER TABLE review.queue ADD COLUMN IF NOT EXISTS template_narrative TEXT;
+ALTER TABLE review.queue ADD COLUMN IF NOT EXISTS llm_narrative TEXT;
+ALTER TABLE review.queue ADD COLUMN IF NOT EXISTS llm_model TEXT;
 """
 
 
