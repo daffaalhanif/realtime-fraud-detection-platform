@@ -130,7 +130,9 @@ def decide(
         trace.mark("already_decided", True)
         return previous
 
-    model_input = _features_for(transaction, model.feature_spec, redis_client, trace)
+    model_input, engineered_features = _features_for(
+        transaction, model.feature_spec, redis_client, trace
+    )
     with trace.step("tier1_score"):
         score = model.score(model_input)
         decision = classify(score, model.thresholds)
@@ -154,6 +156,7 @@ def decide(
                     shadow.model.model_version if tier2_score is not None and shadow else None
                 ),
                 scored_at=datetime.now(UTC),
+                engineered_features=engineered_features,
             )
         )
     trace.mark("kafka_outcome", outcome.value)
@@ -225,11 +228,15 @@ def _read_entity(
 
 def _features_for(
     transaction: Transaction, spec: FeatureSpec, redis_client: redis.Redis, trace: RequestTrace
-) -> np.ndarray:
+) -> tuple[np.ndarray, dict[str, float]]:
     """Vektor input model satu transaksi, persis sesuai kontrak input versi model yang aktif.
 
     Fitur jendela waktu hanya dihitung, dan sequence hanya dibaca dari Redis, kalau kontrak
     input memintanya; versi model tanpa fitur itu tidak menanggung biayanya.
+
+    Returns:
+        Vektor input model, dan nilai kolom input yang bukan kolom transaksi mentah (fitur
+        agregat dan jendela waktu) untuk dititip bersama keputusan.
     """
     with_history = requires_window_features(spec["input_columns"])
     with trace.step("redis_read"):
@@ -248,7 +255,13 @@ def _features_for(
             state, transaction.TransactionAmt, transaction.TransactionDT
         )
         values.update(features)
-        return build_model_input({name: [values[name]] for name in spec["input_columns"]}, spec)
+        engineered = {
+            name: float(values[name])
+            for name in spec["input_columns"]
+            if name not in Transaction.model_fields
+        }
+        matrix = build_model_input({name: [values[name]] for name in spec["input_columns"]}, spec)
+        return matrix, engineered
 
 
 def _fold_into_online_store(redis_client: redis.Redis, transaction: Transaction) -> int:

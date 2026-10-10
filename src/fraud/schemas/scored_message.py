@@ -31,6 +31,10 @@ class ScoredMessage(BaseModel):
         tier2_model_version: Versi model tier 2 yang menghasilkan
             `tier2_score`, kosong kalau tier 2 tidak dipanggil.
         scored_at: Waktu keputusan diambil.
+        engineered_features: Nilai fitur turunan (agregat, dan jendela waktu kalau versi model
+            memakainya) persis seperti yang dimasukkan ke tier 1. Berasal dari state Redis
+            saat scoring yang sudah berubah setelahnya, jadi tidak bisa dihitung ulang oleh
+            consumer. Kosong pada pesan lama.
     """
 
     transaction: Transaction
@@ -40,3 +44,4 @@ class ScoredMessage(BaseModel):
     model_version: str
     tier2_model_version: str | None = None
     scored_at: datetime
+    engineered_features: dict[str, float] | None = None
