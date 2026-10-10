@@ -1,6 +1,6 @@
 """Skema transaksi mentah, kontrak request `POST /score`."""
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class Transaction(BaseModel):
@@ -15,7 +15,10 @@ class Transaction(BaseModel):
 
     TransactionID: int
     TransactionDT: int
-    TransactionAmt: float
+    # Fitur agregat mengandaikan nominal positif dan berhingga: nol membuat rasio terhadap
+    # rata-rata membagi nol, sedangkan NaN mencemari state entitas dan membuat pesan Kafka
+    # tidak terbaca (JSON menulis NaN sebagai null).
+    TransactionAmt: float = Field(gt=0, allow_inf_nan=False)
     ProductCD: str
 
     card1: int
