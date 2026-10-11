@@ -3,7 +3,8 @@
 Hanya kelas `approve_review` yang masuk antrean. Transaksinya sudah disetujui, dan antrean
 ini hanya menandainya untuk ditinjau analis setelahnya. Kelas keputusan dibaca dari pesan,
 bukan dihitung ulang dari skor, supaya antrean selalu sejalan dengan jawaban API walau ambang
-berubah. Setelah item masuk antrean, consumer ini menghitung penjelasan SHAP-nya.
+berubah. Setelah item masuk antrean, consumer ini menghitung penjelasan SHAP-nya beserta
+narasi templat yang disusun darinya.
 
 Pesan ganda tidak pernah menimpa item yang sudah ada, supaya item yang sudah direview analis
 tidak kembali terbuka saat pesannya dibaca ulang. Duplikat yang isinya berbeda sudah dicatat
@@ -30,6 +31,7 @@ from fraud.consumers.base import (
     run_until_signalled,
     transaction_document,
 )
+from fraud.explainability.template import build_template_narrative
 from fraud.explainability.tier1_shap import Tier1Explainer, load_feature_groups
 from fraud.schemas.score_response import DecisionClass
 from fraud.schemas.scored_message import ScoredMessage
@@ -56,9 +58,10 @@ SELECT transaction_id FROM review.queue
 WHERE transaction_id = ANY(%s) AND explanation IS NULL
 """
 
+# Penjelasan dan narasi templatnya ditulis dalam satu UPDATE, jadi keduanya terisi bersamaan.
 # Kondisi IS NULL membuat penulisan aman diulang dan tidak pernah menimpa hasil yang ada.
 _STORE_EXPLANATION = """
-UPDATE review.queue SET explanation = %s
+UPDATE review.queue SET explanation = %s, template_narrative = %s
 WHERE transaction_id = %s AND explanation IS NULL
 """
 
@@ -120,7 +123,10 @@ class ReviewQueueWriter:
                 continue
             pending.discard(transaction_id)
             explanation = self._explain(message)
-            self._connection.execute(_STORE_EXPLANATION, (Jsonb(explanation), transaction_id))
+            self._connection.execute(
+                _STORE_EXPLANATION,
+                (Jsonb(explanation), build_template_narrative(explanation), transaction_id),
+            )
             explained += 1
             unavailable += not explanation.get("available", False)
         if explained:

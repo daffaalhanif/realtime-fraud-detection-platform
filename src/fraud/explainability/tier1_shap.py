@@ -155,6 +155,26 @@ def _json_value(value: Any) -> Any:
     return value
 
 
+def _ensure_finite(explanation: dict[str, Any]) -> None:
+    """Menolak dokumen berisi angka tak berhingga atau NaN.
+
+    JSON standar tidak punya representasi untuk nilai itu, sehingga penulisan ke JSONB gagal dan
+    consumer berhenti di item yang sama berulang kali.
+
+    Raises:
+        ValueError: Skor, nilai dasar, selisih, atau kontribusi mana pun tidak berhingga.
+    """
+    numbers = [
+        explanation["raw_score"],
+        explanation["base_value"],
+        explanation["unexplained"],
+        explanation["other"]["contribution"],
+        *(entry["contribution"] for entry in explanation["contributions"]),
+    ]
+    if not all(math.isfinite(number) for number in numbers):
+        raise ValueError("Penjelasan memuat angka tak berhingga atau NaN.")
+
+
 def unavailable_explanation() -> dict[str, Any]:
     """Penjelasan pengganti saat kontribusi tidak bisa dihitung untuk sebuah item."""
     return {"available": False, "reason": UNAVAILABLE_REASON}
@@ -180,7 +200,8 @@ def build_explanation(
         terjelaskan. Nilai dasar, kontribusi seluruhnya, dan selisih berjumlah skor mentah.
 
     Raises:
-        ValueError: Pesan tidak memuat salah satu kolom input model.
+        ValueError: Pesan tidak memuat salah satu kolom input model, atau hasil perhitungan
+            memuat angka tak berhingga atau NaN.
     """
     spec = model.feature_spec
     values: dict[str, Any] = transaction.model_dump()
@@ -224,7 +245,7 @@ def build_explanation(
                 }
             )
 
-    return {
+    explanation = {
         "available": True,
         "method": "treeshap_lightgbm",
         "model_version": model.model_version,
@@ -238,6 +259,8 @@ def build_explanation(
         },
         "unexplained": raw_score - base_value - math.fsum(totals.values()),
     }
+    _ensure_finite(explanation)
+    return explanation
 
 
 class Tier1Explainer:
