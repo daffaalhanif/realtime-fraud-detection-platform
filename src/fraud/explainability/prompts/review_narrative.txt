@@ -10,6 +10,7 @@ Aturan:
 1. Mulai dengan menyatakan bahwa transaksi disetujui dan ditandai untuk review.
 2. Hanya gunakan angka, nilai, nama kolom, dan porsi yang ada di data. Salin persis; jangan
    membulatkan, menghitung ulang, atau menambah angka baru.
+   Sebagian faktor tidak punya isian "nilai"; sebut faktor itu tanpa nilainya dan jangan menebak.
 3. Sebut faktor yang menaikkan risiko dan yang menurunkan risiko, mulai dari porsi terbesar.
    Tidak perlu menyebut semua faktor.
 4. Kolom atau kelompok kolom anonim (nama seperti C13, D2, V-12, id_30) tidak punya makna bisnis

@@ -113,14 +113,14 @@ def test_invented_number_is_rejected() -> None:
 def test_copied_numbers_and_column_names_are_allowed() -> None:
     explanation = _explanation()
     explanation["contributions"].append(
-        {"name": "C13", "kind": "feature", "value": 1500.0, "contribution": 0.5}
+        {"name": "count_last_1h", "kind": "feature", "value": 1500.0, "contribution": 0.5}
     )
     input_text = build_input(explanation)
     assert input_text is not None
     narrative = (
         "Transaksi ini disetujui dan ditandai untuk review. Email domain P_emaildomain "
-        "gmail.com menaikkan risiko (57%), kolom anonim C13 bernilai 1.500 juga menaikkan "
-        "(14%), sedangkan kode produk ProductCD bernilai W menurunkan risiko (29%)."
+        "menaikkan risiko (57%), jumlah transaksi 1 jam terakhir bernilai 1.500 juga "
+        "menaikkan (14%), sedangkan kode produk ProductCD menurunkan risiko (29%)."
     )
 
     assert violation_reason(narrative, input_text) is None
@@ -146,7 +146,6 @@ def test_input_carries_only_summarised_factors() -> None:
         "label": "email domain P_emaildomain",
         "arah": "menaikkan risiko",
         "porsi": "67%",
-        "nilai": "gmail.com",
     }
     assert "3000123" not in json.dumps(document)
     assert "raw_score" not in json.dumps(document)
@@ -207,3 +206,33 @@ def test_completer_marks_incomplete_response() -> None:
     client = cast(OpenAI, SimpleNamespace(responses=SimpleNamespace(create=create)))
 
     assert OpenAiCompleter(client, "m")("a", "b").complete is False
+
+
+def test_values_are_shared_only_for_whitelisted_engineered_features() -> None:
+    explanation = {
+        "available": True,
+        "other": {"n_units": 0, "contribution": 0.0},
+        "contributions": [
+            {"name": "count_last_1h", "kind": "feature", "value": 4.0, "contribution": 1.0},
+            {"name": "amt_max_so_far", "kind": "feature", "value": 2300.5, "contribution": 0.9},
+            {"name": "TransactionAmt", "kind": "feature", "value": 89.5, "contribution": 0.8},
+            {"name": "card1", "kind": "feature", "value": 9500.0, "contribution": 0.7},
+            {"name": "P_emaildomain", "kind": "feature", "value": "gmail.com", "contribution": 0.6},
+            {"name": "C13", "kind": "feature", "value": 55.0, "contribution": 0.5},
+        ],
+    }
+
+    document = json.loads(cast(str, build_input(explanation)))
+    values = {factor["nama"]: factor.get("nilai") for factor in document["faktor"]}
+
+    assert values == {
+        "count_last_1h": "4",
+        "amt_max_so_far": None,
+        "TransactionAmt": None,
+        "card1": None,
+        "P_emaildomain": None,
+        "C13": None,
+    }
+    sent = json.dumps(document)
+    for secret in ("2.300", "2300", "89,50", "9.500", "9500", "gmail.com"):
+        assert secret not in sent

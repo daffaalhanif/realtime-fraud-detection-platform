@@ -57,6 +57,20 @@ FORBIDDEN_PHRASES = (
     "decline",
 )
 
+# Hanya fitur ini yang nilainya ikut dikirim: berupa hitungan dan rasio yang tidak membuka
+# nominal transaksi. Nilai fitur lain, termasuk kolom mentah transaksi dan entity key, tidak
+# keluar dari sistem; faktornya hanya disebut nama, arah, dan porsinya.
+SHARED_VALUE_FEATURES = frozenset(
+    {
+        "txn_count_so_far",
+        "seconds_since_last_txn",
+        "amt_ratio_to_mean",
+        "count_last_1h",
+        "count_last_24h",
+        "count_last_7d",
+    }
+)
+
 _NUMBER_PATTERN = re.compile(r"\d+(?:[.,]\d+)*")
 
 logger = logging.getLogger(__name__)
@@ -135,8 +149,8 @@ def load_instructions(path: Path = PROMPT_PATH) -> str:
 def build_input(explanation: dict[str, Any]) -> str | None:
     """Menyusun masukan LLM dari dokumen penjelasan.
 
-    Porsi dan arah dihitung di sini, bukan oleh LLM. Identitas transaksi, skor, dan skala logit
-    sengaja tidak disertakan.
+    Porsi dan arah dihitung di sini, bukan oleh LLM. Nilai fitur hanya disertakan untuk
+    `SHARED_VALUE_FEATURES`. Identitas transaksi, skor, dan skala logit sengaja tidak disertakan.
 
     Returns:
         Teks JSON berisi faktor teratas, atau None kalau tidak ada faktor yang bisa dijelaskan.
@@ -158,7 +172,7 @@ def build_input(explanation: dict[str, Any]) -> str | None:
         }
         if entry["kind"] == "group":
             factor["anggota"] = group_members_text(entry)
-        else:
+        elif entry["name"] in SHARED_VALUE_FEATURES:
             factor["nilai"] = format_value(entry["value"])
         factors.append(factor)
 
