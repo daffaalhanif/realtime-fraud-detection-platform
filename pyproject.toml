@@ -42,6 +42,7 @@ dev = [
     "pytest>=9.1.1",
 ]
 consumer = [
+    "langfuse>=4.17.0",
     "openai>=3.28.0",
 ]
 
