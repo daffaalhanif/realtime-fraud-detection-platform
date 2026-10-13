@@ -46,3 +46,17 @@ def test_closing_sentence_excludes_smaller_factors() -> None:
         "Persentase adalah porsi pengaruh di antara 3 faktor terbesar, "
         "tidak termasuk faktor lain yang lebih kecil."
     )
+
+
+def test_entity_key_column_is_labelled_as_entity_key_not_anonymous() -> None:
+    explanation = {
+        "available": True,
+        "contributions": [
+            {"name": "card1", "kind": "feature", "value": 9500.0, "contribution": 1.0}
+        ],
+    }
+
+    narrative = build_template_narrative(explanation)
+
+    assert "entity key card1 (nilai 9.500; 100%)" in narrative
+    assert "anonim" not in narrative

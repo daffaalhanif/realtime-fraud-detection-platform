@@ -36,6 +36,7 @@ _LABELS = {
     "amt_sum_last_24h": "total nominal pada entity key dalam 24 jam terakhir",
     "amt_sum_last_7d": "total nominal pada entity key dalam 7 hari terakhir",
     "TransactionAmt": "nominal transaksi",
+    "card1": "entity key card1",
     "ProductCD": "kode produk ProductCD",
     "P_emaildomain": "email domain P_emaildomain",
     "R_emaildomain": "email domain R_emaildomain",

@@ -14,6 +14,8 @@ Aturan:
    Tidak perlu menyebut semua faktor.
 4. Kolom atau kelompok kolom anonim (nama seperti C13, D2, V-12, id_30) tidak punya makna bisnis
    yang diketahui. Sebut sebagai kolom anonim beserta arah dan porsinya. Jangan menebak artinya.
+   Hanya faktor yang labelnya memuat kata "anonim" yang boleh disebut anonim. Faktor lain, misal
+   berlabel "kolom card2", disebut persis sesuai labelnya tanpa menambah sebutan "anonim".
 5. Kunci entitas adalah kunci teknis yang bisa mewakili sekelompok kartu. Jangan menulis "kartu
    ini", "nasabah ini", atau "pelanggan ini". Pakai istilah "entity key" atau "pola aktivitas
    pada entity key".
