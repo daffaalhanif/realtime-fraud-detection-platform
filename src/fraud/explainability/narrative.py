@@ -37,9 +37,9 @@ PROMPT_PATH = Path(__file__).parent / "prompts" / "review_narrative.txt"
 MAX_OUTPUT_TOKENS = 1500
 REASONING_EFFORT = "low"
 
-# Satu percobaan ulang SDK untuk gangguan jaringan sesaat; lebih dari itu menahan satu batch
-# terlalu lama karena panggilan dilakukan berurutan.
-SDK_MAX_RETRIES = 1
+# Tanpa percobaan ulang SDK: panggilan berurutan dalam batch dibatasi anggaran waktu, dan satu
+# item sudah bisa memakai dua panggilan karena narasi yang melanggar dicoba ulang oleh kode ini.
+SDK_MAX_RETRIES = 0
 
 MIN_NARRATIVE_CHARS = 40
 MAX_NARRATIVE_CHARS = 1200
