@@ -83,10 +83,14 @@ class Completion:
     Attributes:
         text: Teks keluaran model.
         complete: False kalau keluaran terpotong oleh batas token.
+        input_tokens: Jumlah token masukan yang ditagih, None kalau tidak dilaporkan.
+        output_tokens: Jumlah token keluaran yang ditagih, None kalau tidak dilaporkan.
     """
 
     text: str
     complete: bool
+    input_tokens: int | None = None
+    output_tokens: int | None = None
 
 
 @dataclass(frozen=True)
@@ -138,7 +142,13 @@ class OpenAiCompleter:
             # Data transaksi tidak perlu disimpan di sisi penyedia.
             store=False,
         )
-        return Completion(text=response.output_text, complete=response.status == "completed")
+        usage = response.usage
+        return Completion(
+            text=response.output_text,
+            complete=response.status == "completed",
+            input_tokens=usage.input_tokens if usage else None,
+            output_tokens=usage.output_tokens if usage else None,
+        )
 
 
 def load_instructions(path: Path = PROMPT_PATH) -> str:

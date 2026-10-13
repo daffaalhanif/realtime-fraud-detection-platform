@@ -25,6 +25,7 @@ from typing import Any
 
 import psycopg
 from dotenv import load_dotenv
+from langfuse import Langfuse
 from psycopg.types.json import Jsonb
 
 from fraud.consumers.base import (
@@ -39,6 +40,7 @@ from fraud.explainability.narrative import (
     OpenAiCompleter,
     generate_review_narrative,
 )
+from fraud.explainability.tracing import build_langfuse_client, shutdown_langfuse, traced
 from fraud.explainability.template import build_template_narrative
 from fraud.explainability.tier1_shap import Tier1Explainer, load_feature_groups
 from fraud.schemas.score_response import DecisionClass
@@ -224,14 +226,15 @@ class ReviewQueueWriter:
         )
 
 
-def _build_narrator() -> Narrate | None:
+def _build_narrator(langfuse_client: Langfuse | None) -> Narrate | None:
     """Penulis narasi LLM dari environment, atau None kalau `LLM_MODEL` tidak diset."""
     if not os.environ.get("LLM_MODEL"):
         logger.warning("LLM_MODEL tidak diset: narasi LLM dimatikan, hanya narasi templat.")
         return None
     completer = OpenAiCompleter.from_environment()
+    complete = traced(completer, completer.model, langfuse_client)
     return lambda explanation: generate_review_narrative(
-        completer, completer.model, explanation
+        complete, completer.model, explanation
     )
 
 
@@ -240,13 +243,17 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     with connect_postgres(autocommit=True) as connection:
         explainer = Tier1Explainer(load_feature_groups())
+        langfuse_client = build_langfuse_client()
         consumer = ScoredConsumer(
             GROUP_ID,
-            ReviewQueueWriter(connection, explainer.explain, _build_narrator()),
+            ReviewQueueWriter(connection, explainer.explain, _build_narrator(langfuse_client)),
             BATCH_POLICY,
             os.environ["KAFKA_BOOTSTRAP_SERVERS"],
         )
-        run_until_signalled(consumer)
+        try:
+            run_until_signalled(consumer)
+        finally:
+            shutdown_langfuse(langfuse_client)
 
 
 if __name__ == "__main__":

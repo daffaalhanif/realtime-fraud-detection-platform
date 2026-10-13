@@ -180,13 +180,14 @@ def test_completer_sends_the_expected_request() -> None:
 
     def create(**kwargs: Any) -> Any:
         calls.append(kwargs)
-        return SimpleNamespace(output_text="isi", status="completed")
+        usage = SimpleNamespace(input_tokens=7, output_tokens=3)
+        return SimpleNamespace(output_text="isi", status="completed", usage=usage)
 
     client = cast(OpenAI, SimpleNamespace(responses=SimpleNamespace(create=create)))
 
     completion = OpenAiCompleter(client, "m")("aturan", "data")
 
-    assert completion == Completion(text="isi", complete=True)
+    assert completion == Completion(text="isi", complete=True, input_tokens=7, output_tokens=3)
     assert calls == [
         {
             "model": "m",
@@ -201,7 +202,7 @@ def test_completer_sends_the_expected_request() -> None:
 
 def test_completer_marks_incomplete_response() -> None:
     def create(**kwargs: Any) -> Any:
-        return SimpleNamespace(output_text="isi", status="incomplete")
+        return SimpleNamespace(output_text="isi", status="incomplete", usage=None)
 
     client = cast(OpenAI, SimpleNamespace(responses=SimpleNamespace(create=create)))
 
@@ -236,3 +237,14 @@ def test_values_are_shared_only_for_whitelisted_engineered_features() -> None:
     sent = json.dumps(document)
     for secret in ("2.300", "2300", "89,50", "9.500", "9500", "gmail.com"):
         assert secret not in sent
+
+
+def test_completer_tolerates_missing_usage() -> None:
+    def create(**kwargs: Any) -> Any:
+        return SimpleNamespace(output_text="isi", status="completed", usage=None)
+
+    client = cast(OpenAI, SimpleNamespace(responses=SimpleNamespace(create=create)))
+
+    completion = OpenAiCompleter(client, "m")("a", "b")
+
+    assert completion.input_tokens is None and completion.output_tokens is None
