@@ -57,7 +57,7 @@ def _format_number(value: float) -> str:
     return text.replace(",", "#").replace(".", ",").replace("#", ".")
 
 
-def _format_value(value: Any) -> str:
+def format_value(value: Any) -> str:
     if value is None:
         return "kosong"
     if isinstance(value, bool):
@@ -67,26 +67,50 @@ def _format_value(value: Any) -> str:
     return str(value)
 
 
+def factor_label(entry: dict[str, Any]) -> str:
+    """Label berbahasa Indonesia untuk satu fitur atau kelompok kolom."""
+    name = entry["name"]
+    if entry["kind"] == "group":
+        return f"kelompok kolom anonim {name}"
+    if name in _LABELS:
+        return _LABELS[name]
+    if _is_anonymous(entry):
+        return f"kolom anonim {name}"
+    return f"kolom {name}"
+
+
+def group_members_text(entry: dict[str, Any]) -> str:
+    """Anggota sebuah kelompok kolom, dipotong supaya tetap ringkas."""
+    members = entry["members"]
+    shown = ", ".join(members[:MAX_SHOWN_MEMBERS])
+    if len(members) > MAX_SHOWN_MEMBERS:
+        shown += f", dan {len(members) - MAX_SHOWN_MEMBERS} lainnya"
+    return shown
+
+
+def usable_entries(explanation: dict[str, Any]) -> list[dict[str, Any]]:
+    """Kontribusi yang bisa dijadikan porsi: berhingga dan tidak nol, urut dari terbesar."""
+    # Kontribusi tak berhingga atau NaN tidak bisa dijadikan porsi, jadi entrinya dibuang.
+    return [
+        e
+        for e in explanation["contributions"]
+        if math.isfinite(e["contribution"]) and e["contribution"] != 0.0
+    ]
+
+
+def total_contribution(entries: list[dict[str, Any]]) -> float:
+    """Penyebut porsi pengaruh: jumlah besar kontribusi seluruh entri."""
+    return math.fsum(abs(e["contribution"]) for e in entries)
+
+
 def _describe(entry: dict[str, Any], share: str) -> str:
     """Satu faktor sebagai frasa: label, nilai (kalau fitur tunggal), dan porsi pengaruhnya."""
     if entry["kind"] == "group":
-        members = entry["members"]
-        shown = ", ".join(members[:MAX_SHOWN_MEMBERS])
-        if len(members) > MAX_SHOWN_MEMBERS:
-            shown += f", dan {len(members) - MAX_SHOWN_MEMBERS} lainnya"
-        return f"kelompok kolom anonim {entry['name']} ({shown}; {share})"
-
-    name = entry["name"]
-    if name in _LABELS:
-        label = _LABELS[name]
-    elif _is_anonymous(entry):
-        label = f"kolom anonim {name}"
-    else:
-        label = f"kolom {name}"
-    return f"{label} (nilai {_format_value(entry['value'])}; {share})"
+        return f"{factor_label(entry)} ({group_members_text(entry)}; {share})"
+    return f"{factor_label(entry)} (nilai {format_value(entry['value'])}; {share})"
 
 
-def _share_text(contribution: float, total: float) -> str:
+def share_text(contribution: float, total: float) -> str:
     share = abs(contribution) / total * 100
     return "<1%" if share < 1 else f"{round(share)}%"
 
@@ -104,13 +128,8 @@ def build_template_narrative(explanation: dict[str, Any]) -> str:
     """
     if not explanation.get("available"):
         return UNAVAILABLE_NARRATIVE
-    # Kontribusi tak berhingga atau NaN tidak bisa dijadikan porsi, jadi entrinya dibuang.
-    entries = [
-        e
-        for e in explanation["contributions"]
-        if math.isfinite(e["contribution"]) and e["contribution"] != 0.0
-    ]
-    total = math.fsum(abs(e["contribution"]) for e in entries)
+    entries = usable_entries(explanation)
+    total = total_contribution(entries)
     if not entries or total == 0.0:
         return UNAVAILABLE_NARRATIVE
 
@@ -125,7 +144,7 @@ def build_template_narrative(explanation: dict[str, Any]) -> str:
     ):
         if group:
             factors = "; ".join(
-                _describe(e, _share_text(e["contribution"], total)) for e in group
+                _describe(e, share_text(e["contribution"], total)) for e in group
             )
             sentences.append(f"Faktor yang paling {heading} risiko: {factors}.")
     sentences.append(
