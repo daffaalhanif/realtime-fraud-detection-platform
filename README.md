@@ -1,4 +1,4 @@
-# Realtime Fraud Detection Platform (in progress)
+# Real-Time Fraud Detection Platform
 
 <p align="center">
   <img src="assets/cover.png" alt="Real-Time Fraud Detection Platform">
