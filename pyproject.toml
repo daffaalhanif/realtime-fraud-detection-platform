@@ -47,6 +47,7 @@ consumer = [
 ]
 dashboard = [
     "pyjwt>=2.15.1",
+    "streamlit>=1.65.0",
 ]
 
 [tool.uv]
