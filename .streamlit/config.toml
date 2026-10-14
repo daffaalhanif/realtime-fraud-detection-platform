@@ -1,0 +1,3 @@
+# Dashboard memuat data transaksi, jadi statistik pemakaian tidak dikirim ke pihak luar.
+[browser]
+gatherUsageStats = false
