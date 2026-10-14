@@ -1,5 +1,9 @@
 # Realtime Fraud Detection Platform (in progress)
 
+<p align="center">
+  <img src="assets/cover.png" alt="Real-Time Fraud Detection Platform">
+</p>
+
 A real-time risk scoring platform for card-not-present payment transactions (the customer types card details into an online form). Every incoming transaction is scored automatically through a two-tier model pipeline and ends in one of three decisions: **decline**, **approve and flag for review**, or **approve normally**. Built end to end on the public [IEEE-CIS Fraud Detection](https://www.kaggle.com/competitions/ieee-fraud-detection) dataset, covering data pipelines, model training and evaluation, low-latency serving, event-driven processing, explainability, MLOps, and model monitoring.
 
 > **Status: in progress.** The data pipeline, both model tiers, the scoring API, the Kafka consumers, and most of the explainability and dashboard work are built and tested. Drift monitoring, retraining automation, load testing, and cloud deployment are still ahead. See [Project status](#project-status) for the exact breakdown.
