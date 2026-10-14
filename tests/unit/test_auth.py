@@ -9,12 +9,14 @@ from fraud.dashboard.auth import (
     AuthError,
     AuthSettings,
     Claims,
+    ForbiddenError,
     Role,
     authenticate,
     decode_token,
     hash_password,
     issue_token,
     load_settings,
+    require_role,
     verify_password,
 )
 
@@ -190,3 +192,17 @@ def test_load_settings_rejects_unsafe_or_incomplete_configuration(
 
 def test_unknown_user_check_uses_a_valid_hash() -> None:
     assert auth._unknown_user_hash().startswith("scrypt$")
+
+
+def test_require_role_accepts_matching_role_and_rejects_the_other() -> None:
+    analyst = Claims("ani", Role.ANALYST)
+
+    require_role(analyst, Role.ANALYST)
+    with pytest.raises(ForbiddenError):
+        require_role(analyst, Role.ML_ENGINEER)
+    with pytest.raises(ForbiddenError):
+        require_role(Claims("eko", Role.ML_ENGINEER), Role.ANALYST)
+
+
+def test_forbidden_is_a_kind_of_auth_error() -> None:
+    assert issubclass(ForbiddenError, AuthError)

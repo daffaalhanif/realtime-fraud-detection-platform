@@ -51,6 +51,10 @@ class AuthError(Exception):
     """Token tidak sah: rusak, kedaluwarsa, kunci tanda tangan berbeda, atau klaim tidak lengkap."""
 
 
+class ForbiddenError(AuthError):
+    """Pengguna sudah login, tetapi perannya tidak boleh mengakses bagian yang diminta."""
+
+
 class AuthConfigError(ValueError):
     """Konfigurasi autentikasi tidak lengkap atau tidak aman."""
 
@@ -209,6 +213,16 @@ def decode_token(settings: AuthSettings, token: str) -> Claims:
         return Claims(username=str(payload["sub"]), role=Role(payload["role"]))
     except (jwt.PyJWTError, ValueError) as error:
         raise AuthError("Token tidak sah.") from error
+
+
+def require_role(claims: Claims, role: Role) -> None:
+    """Memastikan peran pengguna sama dengan yang dibutuhkan.
+
+    Raises:
+        ForbiddenError: Peran pengguna berbeda.
+    """
+    if claims.role is not role:
+        raise ForbiddenError(f"Peran {claims.role.value} tidak boleh mengakses bagian ini.")
 
 
 def _hash_password_command() -> None:
